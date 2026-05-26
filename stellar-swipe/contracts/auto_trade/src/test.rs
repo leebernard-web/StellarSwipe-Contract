@@ -896,6 +896,70 @@ fn test_portfolio_value_calculation() {
     });
 }
 
+#[test]
+fn test_compare_portfolios_normal() {
+    let env = setup_env();
+    let contract_id = env.register(AutoTradeContract, ());
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        risk::update_position(&env, &user_a, 1, 10, 100);
+        risk::set_asset_price(&env, 1, 120);
+        risk::update_position(&env, &user_b, 2, 10, 100);
+        risk::set_asset_price(&env, 2, 90);
+
+        let comparison =
+            AutoTradeContract::compare_portfolios(env.clone(), user_a.clone(), user_b.clone())
+                .unwrap();
+
+        assert_eq!(comparison.user_a_pnl, 200);
+        assert_eq!(comparison.user_b_pnl, -100);
+        assert_eq!(comparison.user_a_roi, 2000);
+        assert_eq!(comparison.user_b_roi, -1000);
+        assert_eq!(comparison.user_a_win_rate, 10_000);
+        assert_eq!(comparison.user_b_win_rate, 0);
+    });
+}
+
+#[test]
+fn test_compare_portfolios_privacy_mode_blocked() {
+    let env = setup_env();
+    let contract_id = env.register(AutoTradeContract, ());
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        AutoTradeContract::set_portfolio_privacy(env.clone(), user_a.clone(), true);
+
+        let result =
+            AutoTradeContract::compare_portfolios(env.clone(), user_a.clone(), user_b.clone());
+
+        assert_eq!(result, Err(AutoTradeError::PrivacyModeEnabled));
+    });
+}
+
+#[test]
+fn test_compare_portfolios_correct_winner_selection() {
+    let env = setup_env();
+    let contract_id = env.register(AutoTradeContract, ());
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        risk::update_position(&env, &user_a, 1, 10, 100);
+        risk::set_asset_price(&env, 1, 105);
+        risk::update_position(&env, &user_b, 2, 10, 100);
+        risk::set_asset_price(&env, 2, 130);
+
+        let comparison =
+            AutoTradeContract::compare_portfolios(env.clone(), user_a.clone(), user_b.clone())
+                .unwrap();
+
+        assert_eq!(comparison.winner, user_b);
+    });
+}
+
 // ========================================
 // Authorization Tests
 // ========================================
