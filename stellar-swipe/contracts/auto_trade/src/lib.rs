@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
 mod auth;
 mod errors;
@@ -52,6 +52,17 @@ pub struct TradeResult {
     pub trade: Trade,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TradeSimulation {
+    pub expected_output: i128,
+    pub fee_amount: i128,
+    pub slippage_bps: u32,
+    pub price_impact_bps: u32,
+    pub would_succeed: bool,
+    pub failure_reason: Option<String>,
+}
+
 /// ==========================
 /// Contract
 /// ==========================
@@ -65,6 +76,71 @@ pub struct AutoTradeContract;
 
 #[contractimpl]
 impl AutoTradeContract {
+    pub fn simulate_copy_trade(
+        env: Env,
+        user: Address,
+        signal_id: u64,
+        amount: i128,
+        max_slippage_bps: u32,
+    ) -> TradeSimulation {
+        if amount <= 0 {
+            return failed_simulation(&env, "invalid_amount");
+        }
+
+        let signal = match storage::get_signal(&env, signal_id) {
+            Some(signal) => signal,
+            None => return failed_simulation(&env, "signal_not_found"),
+        };
+
+        if env.ledger().timestamp() > signal.expiry {
+            return failed_simulation(&env, "signal_expired");
+        }
+
+        if !auth::is_authorized(&env, &user, amount) {
+            return failed_simulation(&env, "unauthorized");
+        }
+
+        if !sdex::has_sufficient_balance(&env, &user, &signal.base_asset, amount) {
+            return failed_simulation(&env, "insufficient_balance");
+        }
+
+        let current_price = sdex::get_current_price(&env, &signal);
+        let available_liquidity = sdex::get_available_liquidity(&env, &signal, amount);
+        if available_liquidity <= 0 {
+            return failed_simulation(&env, "insufficient_liquidity");
+        }
+
+        let expected_output = core::cmp::min(amount, available_liquidity);
+        let price_delta = if current_price > signal.price {
+            current_price - signal.price
+        } else {
+            signal.price - current_price
+        };
+        let slippage_bps = ((price_delta * 10_000) / signal.price) as u32;
+        let price_impact_bps = if available_liquidity > 0 {
+            ((amount * 10_000) / available_liquidity) as u32
+        } else {
+            0
+        };
+
+        let failure_reason = if slippage_bps > max_slippage_bps {
+            Some(String::from_str(&env, "slippage_exceeded"))
+        } else if expected_output == 0 {
+            Some(String::from_str(&env, "insufficient_liquidity"))
+        } else {
+            None
+        };
+
+        TradeSimulation {
+            expected_output,
+            fee_amount: 0,
+            slippage_bps,
+            price_impact_bps,
+            would_succeed: failure_reason.is_none(),
+            failure_reason,
+        }
+    }
+
     /// Execute a trade on behalf of a user based on a signal
     pub fn execute_trade(
         env: Env,
@@ -287,6 +363,17 @@ impl AutoTradeContract {
     /// Get authorization config
     pub fn get_auth_config(env: Env, user: Address) -> Option<auth::AuthConfig> {
         auth::get_auth_config(&env, &user)
+    }
+}
+
+fn failed_simulation(env: &Env, reason: &str) -> TradeSimulation {
+    TradeSimulation {
+        expected_output: 0,
+        fee_amount: 0,
+        slippage_bps: 0,
+        price_impact_bps: 0,
+        would_succeed: false,
+        failure_reason: Some(String::from_str(env, reason)),
     }
 }
 
