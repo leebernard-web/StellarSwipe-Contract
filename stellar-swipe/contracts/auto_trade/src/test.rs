@@ -317,6 +317,62 @@ fn test_execute_trade_market_partial_fill() {
 }
 
 #[test]
+fn test_simulate_copy_trade_success() {
+    let env = setup_env();
+    let contract_id = env.register(AutoTradeContract, ());
+    let user = Address::generate(&env);
+    let signal_id = 20;
+    let signal = setup_signal(&env, signal_id, env.ledger().timestamp() + 1000);
+
+    env.as_contract(&contract_id, || {
+        storage::set_signal(&env, signal_id, &signal);
+        storage::authorize_user(&env, &user);
+        env.storage()
+            .temporary()
+            .set(&(user.clone(), symbol_short!("balance")), &500i128);
+        env.storage()
+            .temporary()
+            .set(&(symbol_short!("liquidity"), signal_id), &500i128);
+        env.storage()
+            .temporary()
+            .set(&(symbol_short!("price"), signal_id), &101i128);
+
+        let simulation =
+            AutoTradeContract::simulate_copy_trade(env.clone(), user.clone(), signal_id, 200, 200);
+
+        assert!(simulation.would_succeed);
+        assert_eq!(simulation.expected_output, 200);
+        assert_eq!(simulation.fee_amount, 0);
+        assert_eq!(simulation.slippage_bps, 100);
+        assert_eq!(simulation.price_impact_bps, 4000);
+        assert!(simulation.failure_reason.is_none());
+
+        assert!(AutoTradeContract::get_trade(env.clone(), user.clone(), signal_id).is_none());
+    });
+}
+
+#[test]
+fn test_simulate_copy_trade_failure() {
+    let env = setup_env();
+    let contract_id = env.register(AutoTradeContract, ());
+    let user = Address::generate(&env);
+    let signal_id = 21;
+    let signal = setup_signal(&env, signal_id, env.ledger().timestamp() + 1000);
+
+    env.as_contract(&contract_id, || {
+        storage::set_signal(&env, signal_id, &signal);
+
+        let simulation =
+            AutoTradeContract::simulate_copy_trade(env.clone(), user.clone(), signal_id, 200, 200);
+
+        assert!(!simulation.would_succeed);
+        assert_eq!(simulation.expected_output, 0);
+        assert!(simulation.failure_reason.is_some());
+        assert!(AutoTradeContract::get_trade(env.clone(), user.clone(), signal_id).is_none());
+    });
+}
+
+#[test]
 fn test_execute_trade_limit_filled() {
     let env = setup_env();
     let contract_id = env.register(AutoTradeContract, ());

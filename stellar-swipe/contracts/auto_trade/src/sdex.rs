@@ -23,6 +23,16 @@ pub fn has_sufficient_balance(env: &Env, user: &Address, _asset: &u32, amount: i
     balance >= amount
 }
 
+pub fn get_available_liquidity(env: &Env, signal: &Signal, amount: i128) -> i128 {
+    let key = (symbol_short!("liquidity"), signal.signal_id);
+    env.storage().temporary().get(&key).unwrap_or(amount)
+}
+
+pub fn get_current_price(env: &Env, signal: &Signal) -> i128 {
+    let key = (symbol_short!("price"), signal.signal_id);
+    env.storage().temporary().get(&key).unwrap_or(signal.price)
+}
+
 /// ==========================
 /// Market Order
 /// ==========================
@@ -38,8 +48,7 @@ pub fn execute_market_order(
         return Err(AutoTradeError::SignalExpired);
     }
 
-    let key = (symbol_short!("liquidity"), signal.signal_id);
-    let available_liquidity: i128 = env.storage().temporary().get(&key).unwrap_or(amount);
+    let available_liquidity = get_available_liquidity(env, signal, amount);
 
     if available_liquidity <= 0 {
         return Err(AutoTradeError::InsufficientLiquidity);
@@ -68,8 +77,7 @@ pub fn execute_limit_order(
         return Err(AutoTradeError::SignalExpired);
     }
 
-    let key = (symbol_short!("price"), signal.signal_id);
-    let market_price: i128 = env.storage().temporary().get(&key).unwrap_or(signal.price);
+    let market_price = get_current_price(env, signal);
 
     if market_price > signal.price {
         return Ok(ExecutionResult {
