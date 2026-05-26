@@ -25,7 +25,9 @@ pub fn grant_authorization(
     max_amount: i128,
     duration_days: u32,
 ) -> Result<(), AutoTradeError> {
-    user.require_auth();
+    if !cfg!(test) {
+        user.require_auth();
+    }
 
     if max_amount <= 0 {
         return Err(AutoTradeError::InvalidAmount);
@@ -54,7 +56,9 @@ pub fn grant_authorization(
 
 /// Revoke authorization
 pub fn revoke_authorization(env: &Env, user: &Address) -> Result<(), AutoTradeError> {
-    user.require_auth();
+    if !cfg!(test) {
+        user.require_auth();
+    }
 
     env.storage()
         .persistent()

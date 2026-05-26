@@ -8,10 +8,16 @@ publish = false
 crate-type = ["lib", "cdylib"]
 doctest = false
 
+[features]
+testutils = ["soroban-sdk/testutils", "stellar_swipe_common/testutils", "shared/testutils"]
+
 [dependencies]
 soroban-sdk = { workspace = true }
 stellar_swipe_common = { path = "../common" }
+shared = { path = "../shared" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+stellar_swipe_common = { path = "../common", features = ["testutils"] }
+shared = { path = "../shared", features = ["testutils"] }
 
