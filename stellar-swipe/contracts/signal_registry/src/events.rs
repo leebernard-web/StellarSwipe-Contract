@@ -136,6 +136,14 @@ pub fn emit_provider_stats_updated(
         .publish(topics, (provider, success_rate, avg_return, total_volume));
 }
 
+pub fn emit_verification_eligibility_checked(env: &Env, provider: Address, eligible: bool) {
+    let topics = (
+        Symbol::new(env, "verification_eligibility_checked"),
+        provider,
+    );
+    env.events().publish(topics, eligible);
+}
+
 pub fn emit_follow_gained(env: &Env, user: Address, provider: Address, new_count: u32) {
     let topics = (Symbol::new(env, "follow_gained"),);
     env.events()

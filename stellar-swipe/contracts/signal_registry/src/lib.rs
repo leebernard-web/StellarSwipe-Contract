@@ -1286,6 +1286,29 @@ impl SignalRegistry {
         Self::get_provider_stats(env, provider)
     }
 
+    /// Record provider stake amount for verification checks.
+    pub fn set_provider_stake(env: Env, provider: Address, amount: i128) -> Result<(), AdminError> {
+        provider.require_auth();
+        if amount < 0 {
+            return Err(AdminError::InvalidParameter);
+        }
+
+        let mut stakes = Self::get_provider_stakes_map(&env);
+        stakes.set(provider, amount);
+        Self::save_provider_stakes_map(&env, &stakes);
+        Ok(())
+    }
+
+    /// Check whether a provider meets automated verification criteria.
+    pub fn check_verification_eligibility(env: Env, provider: Address) -> VerificationEligibility {
+        let stakes = Self::get_provider_stakes_map(&env);
+        let stats = Self::get_provider_stats_map(&env);
+        let stake = stakes.get(provider.clone()).unwrap_or(0);
+        let performance = stats.get(provider.clone()).unwrap_or_default();
+
+        providers::check_verification_eligibility(&env, provider, stake, performance)
+    }
+
     /// Get leaderboard of top providers by metric
     ///
     /// # Arguments
