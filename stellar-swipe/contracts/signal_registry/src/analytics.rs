@@ -1,10 +1,11 @@
-use soroban_sdk::{Address, Env, Map, String, Vec};
-use crate::types::{Signal, SignalStatus};
 use crate::social::get_follower_count;
+use crate::types::{Signal, SignalStatus};
+use soroban_sdk::{contracttype, Address, Env, Map, String, Vec};
+use stellar_swipe_common::{SECONDS_PER_DAY, SECONDS_PER_HOUR};
 
 const MIN_SIGNALS_FOR_ANALYTICS: u32 = 10;
-const HOURS_24: u64 = 86400;
 
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProviderAnalytics {
     pub provider: Address,
@@ -17,6 +18,7 @@ pub struct ProviderAnalytics {
     pub follower_growth_rate: i128,
 }
 
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct GlobalAnalytics {
     pub total_signals_24h: u32,
@@ -32,7 +34,7 @@ pub fn calculate_provider_analytics(
 ) -> Option<ProviderAnalytics> {
     let signals = get_provider_signals(signals_map, provider);
     let total = signals.len();
-    
+
     if total < MIN_SIGNALS_FOR_ANALYTICS {
         return None;
     }
@@ -61,7 +63,10 @@ pub fn get_trending_assets(
     signals_map: &Map<u64, Signal>,
     window_hours: u64,
 ) -> Vec<(String, u32)> {
-    let cutoff = env.ledger().timestamp().saturating_sub(window_hours * 3600);
+    let cutoff = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(window_hours * SECONDS_PER_HOUR);
     let mut pair_counts: Map<String, u32> = Map::new(env);
 
     for i in 0..signals_map.keys().len() {
@@ -103,11 +108,8 @@ pub fn get_trending_assets(
     result
 }
 
-pub fn calculate_global_analytics(
-    env: &Env,
-    signals_map: &Map<u64, Signal>,
-) -> GlobalAnalytics {
-    let cutoff = env.ledger().timestamp().saturating_sub(HOURS_24);
+pub fn calculate_global_analytics(env: &Env, signals_map: &Map<u64, Signal>) -> GlobalAnalytics {
+    let cutoff = env.ledger().timestamp().saturating_sub(SECONDS_PER_DAY);
     let mut total_signals_24h = 0u32;
     let mut total_volume_24h = 0i128;
     let mut successful = 0u32;
@@ -120,7 +122,10 @@ pub fn calculate_global_analytics(
                     total_signals_24h += 1;
                     total_volume_24h = total_volume_24h.saturating_add(signal.total_volume);
                 }
-                if matches!(signal.status, SignalStatus::Successful | SignalStatus::Failed) {
+                if matches!(
+                    signal.status,
+                    SignalStatus::Successful | SignalStatus::Failed
+                ) && signal.adoption_count > 0 {
                     terminal += 1;
                     if signal.status == SignalStatus::Successful {
                         successful += 1;
@@ -147,7 +152,7 @@ pub fn calculate_global_analytics(
 fn get_provider_signals(signals_map: &Map<u64, Signal>, provider: &Address) -> Vec<Signal> {
     let env = signals_map.env();
     let mut result = Vec::new(&env);
-    
+
     for i in 0..signals_map.keys().len() {
         if let Some(key) = signals_map.keys().get(i) {
             if let Some(signal) = signals_map.get(key) {
@@ -164,10 +169,10 @@ fn calculate_avg_roi(signals: &Vec<Signal>) -> i128 {
     if signals.is_empty() {
         return 0;
     }
-    
+
     let mut total = 0i128;
     let mut count = 0u32;
-    
+
     for i in 0..signals.len() {
         let signal = signals.get(i).unwrap();
         if signal.executions > 0 {
@@ -175,13 +180,17 @@ fn calculate_avg_roi(signals: &Vec<Signal>) -> i128 {
             count += 1;
         }
     }
-    
-    if count > 0 { total / count as i128 } else { 0 }
+
+    if count > 0 {
+        total / count as i128
+    } else {
+        0
+    }
 }
 
 fn find_best_asset_pair(env: &Env, signals: &Vec<Signal>) -> String {
     let mut pair_roi: Map<String, i128> = Map::new(env);
-    
+
     for i in 0..signals.len() {
         let signal = signals.get(i).unwrap();
         if signal.executions > 0 {
@@ -190,10 +199,10 @@ fn find_best_asset_pair(env: &Env, signals: &Vec<Signal>) -> String {
             pair_roi.set(signal.asset_pair.clone(), current + roi);
         }
     }
-    
+
     let mut best_pair = String::from_str(env, "");
     let mut best_roi = i128::MIN;
-    
+
     for i in 0..pair_roi.keys().len() {
         if let Some(key) = pair_roi.keys().get(i) {
             if let Some(roi) = pair_roi.get(key.clone()) {
@@ -204,28 +213,29 @@ fn find_best_asset_pair(env: &Env, signals: &Vec<Signal>) -> String {
             }
         }
     }
-    
+
     best_pair
 }
 
 fn find_best_time_of_day(signals: &Vec<Signal>) -> u32 {
     let mut hour_roi = [0i128; 24];
     let mut hour_counts = [0u32; 24];
-    
+
     for i in 0..signals.len() {
         let signal = signals.get(i).unwrap();
         if signal.executions > 0 {
             let hour = ((signal.timestamp % 86400) / 3600) as usize;
             if hour < 24 {
-                hour_roi[hour] = hour_roi[hour].saturating_add(signal.total_roi / signal.executions as i128);
+                hour_roi[hour] =
+                    hour_roi[hour].saturating_add(signal.total_roi / signal.executions as i128);
                 hour_counts[hour] += 1;
             }
         }
     }
-    
+
     let mut best_hour = 0u32;
     let mut best_avg = i128::MIN;
-    
+
     for h in 0..24 {
         if hour_counts[h] > 0 {
             let avg = hour_roi[h] / hour_counts[h] as i128;
@@ -235,14 +245,14 @@ fn find_best_time_of_day(signals: &Vec<Signal>) -> u32 {
             }
         }
     }
-    
+
     best_hour
 }
 
 fn calculate_win_streak(signals: &Vec<Signal>) -> u32 {
     let mut streak = 0u32;
     let mut max_streak = 0u32;
-    
+
     for i in 0..signals.len() {
         let signal = signals.get(i).unwrap();
         if signal.status == SignalStatus::Successful {
@@ -254,7 +264,7 @@ fn calculate_win_streak(signals: &Vec<Signal>) -> u32 {
             streak = 0;
         }
     }
-    
+
     max_streak
 }
 
@@ -262,13 +272,13 @@ fn calculate_avg_lifetime(signals: &Vec<Signal>) -> u64 {
     if signals.is_empty() {
         return 0;
     }
-    
+
     let mut total = 0u64;
     for i in 0..signals.len() {
         let signal = signals.get(i).unwrap();
         total = total.saturating_add(signal.expiry.saturating_sub(signal.timestamp));
     }
-    
+
     total / signals.len() as u64
 }
 

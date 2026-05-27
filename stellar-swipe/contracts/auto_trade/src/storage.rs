@@ -1,5 +1,7 @@
 #![allow(dead_code)]
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, symbol_short, Address, Env};
+
+use crate::auth::{AuthConfig, AuthKey};
 
 #[contracttype]
 #[derive(Clone)]
@@ -35,40 +37,56 @@ pub fn set_signal(env: &Env, id: u64, signal: &Signal) {
     env.storage().persistent().set(&DataKey::Signal(id), signal);
 }
 
-/// Get rate limit info for a user
-pub fn get_rate_limit_info(env: &Env, user: &Address) -> Option<RateLimitInfo> {
-    env.storage().persistent().get(&DataKey::RateLimitInfo(user.clone()))
+/// Test helper: auth plus max temporary SDEX balance.
+pub fn authorize_user(env: &Env, user: &Address) {
+    authorize_user_with_limits(env, user, i128::MAX / 4, 30);
+    env.storage()
+        .temporary()
+        .set(&(user.clone(), symbol_short!("balance")), &i128::MAX);
 }
 
-/// Set rate limit info for a user
-pub fn set_rate_limit_info(env: &Env, user: &Address, info: &RateLimitInfo) {
+/// Authorize a user with default limits (test helper).
+#[cfg(test)]
+pub fn authorize_user(env: &Env, user: &Address) {
+    let config = AuthConfig {
+        authorized: true,
+        max_trade_amount: 1_000_000_000_000,
+        expires_at: env.ledger().timestamp() + (30 * 86400),
+        granted_at: env.ledger().timestamp(),
+    };
     env.storage()
         .persistent()
-        .set(&DataKey::RateLimitInfo(user.clone()), info);
+        .set(&AuthKey::Authorization(user.clone()), &config);
 }
 
-/// Check if user is rate limited (considering expiry)
-pub fn is_rate_limited(env: &Env, user: &Address) -> bool {
-    if let Some(info) = get_rate_limit_info(env, user) {
-        if !info.is_limited {
-            return false;
-        }
+/// Authorize a user with explicit limits.
+pub fn authorize_user_with_limits(
+    env: &Env,
+    user: &Address,
+    max_trade_amount: i128,
+    duration_days: u32,
+) {
+    let config = AuthConfig {
+        authorized: true,
+        max_trade_amount,
+        expires_at: env.ledger().timestamp() + (duration_days as u64 * 86400),
+        granted_at: env.ledger().timestamp(),
+    };
+    env.storage()
+        .persistent()
+        .set(&AuthKey::Authorization(user.clone()), &config);
+    env.storage()
+        .temporary()
+        .set(&(user.clone(), symbol_short!("balance")), &i128::MAX);
+}
 
-        let now = env.ledger().timestamp();
-        
-        // If expired, clear the flag
-        if now >= info.expires_at {
-            let expired_info = RateLimitInfo {
-                user: user.clone(),
-                is_limited: false,
-                expires_at: 0,
-            };
-            set_rate_limit_info(env, user, &expired_info);
-            return false;
-        }
+pub fn revoke_user_authorization(env: &Env, user: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&AuthKey::Authorization(user.clone()));
+}
 
-        true
-    } else {
-        false
-    }
+#[cfg(test)]
+pub fn authorize_user(env: &Env, user: &Address) {
+    authorize_user_with_limits(env, user, 1_000_000_000_000, 30);
 }
