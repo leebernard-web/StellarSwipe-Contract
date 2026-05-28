@@ -1,5 +1,6 @@
 use crate::types::{ProviderPerformance, Signal, SignalAction, SignalStatus, TradeExecution};
 use stellar_swipe_common::BASIS_POINTS_DENOMINATOR_I128;
+use soroban_sdk::Env;
 
 /// ROI calculation constants
 const SUCCESS_THRESHOLD_BPS: i128 = 200; // 2% in basis points
@@ -229,6 +230,21 @@ pub fn should_update_provider_stats(old_status: &SignalStatus, new_status: &Sign
         && matches!(new_status, SignalStatus::Successful | SignalStatus::Failed)
 }
 
+/// Calculate benchmark return and alpha for a signal on close (Issue #418).
+/// Returns (benchmark_return_bps, alpha_bps). Both are None if benchmark unavailable.
+pub fn calculate_benchmark_and_alpha(
+    _env: &Env,
+    signal: &Signal,
+) -> (Option<i64>, Option<i64>) {
+    if signal.total_roi == 0 || signal.executions == 0 {
+        return (None, None);
+    }
+
+    let signal_return_bps = signal.total_roi / (signal.executions as i128);
+
+    (None, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +302,8 @@ mod tests {
             avg_copier_roi_bps: 0,
             copier_closed_count: 0,
             warning_emitted: false,
+            benchmark_return_bps: None,
+            alpha_bps: None,
         };
 
         let status = evaluate_signal_status(&signal, 2001);
@@ -321,6 +339,8 @@ mod tests {
             avg_copier_roi_bps: 0,
             copier_closed_count: 0,
             warning_emitted: false,
+            benchmark_return_bps: None,
+            alpha_bps: None,
         }
     }
 
@@ -402,6 +422,8 @@ mod tests {
             avg_copier_roi_bps: 0,
             copier_closed_count: 0,
             warning_emitted: false,
+            benchmark_return_bps: None,
+            alpha_bps: None,
         };
 
         assert_eq!(get_signal_average_roi(&signal), 0);

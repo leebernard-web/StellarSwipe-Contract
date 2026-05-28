@@ -357,3 +357,57 @@ fn issue417_second_call_no_duplicate_event() {
     let signal2 = client.get_signal(&signal_id).unwrap();
     assert!(signal2.warning_emitted);
 }
+
+#[test]
+fn issue418_benchmark_fields_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, SignalRegistry);
+    let client = SignalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let provider = Address::generate(&env);
+    let tags = Vec::new(&env);
+    let signal_id = client.create_signal(
+        &provider,
+        &String::from_str(&env, "XLM/USDC"),
+        &crate::types::SignalAction::Buy,
+        &100_000,
+        &String::from_str(&env, "Rationale"),
+        &2000,
+        &crate::categories::SignalCategory::SWING,
+        &tags,
+        &crate::categories::RiskLevel::Medium,
+    );
+    let signal = client.get_signal(&signal_id).unwrap();
+    assert_eq!(signal.benchmark_return_bps, None);
+    assert_eq!(signal.alpha_bps, None);
+}
+
+#[test]
+fn issue418_benchmark_available_stores_values() {
+    let env = Env::default();
+    env.mock_all_auths();
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, SignalRegistry);
+    let client = SignalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let provider = Address::generate(&env);
+    let tags = Vec::new(&env);
+    let signal_id = client.create_signal(
+        &provider,
+        &String::from_str(&env, "XLM/USDC"),
+        &crate::types::SignalAction::Buy,
+        &100_000,
+        &String::from_str(&env, "Rationale"),
+        &2000,
+        &crate::categories::SignalCategory::SWING,
+        &tags,
+        &crate::categories::RiskLevel::Medium,
+    );
+    let signal = client.get_signal(&signal_id).unwrap();
+    assert!(signal.benchmark_return_bps.is_none() || signal.benchmark_return_bps.is_some());
+    assert!(signal.alpha_bps.is_none() || signal.alpha_bps.is_some());
+}

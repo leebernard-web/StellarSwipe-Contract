@@ -83,6 +83,10 @@ pub struct Signal {
     pub copier_closed_count: u32,
     /// Whether expiry warning has been emitted for this signal (Issue #417).
     pub warning_emitted: bool,
+    /// Benchmark return in basis points at signal close (Issue #418).
+    pub benchmark_return_bps: Option<i64>,
+    /// Alpha (outperformance) in basis points at signal close (Issue #418).
+    pub alpha_bps: Option<i64>,
 }
 
 /// Legacy on-chain format (v1) before v2 added `submitted_at`, `rationale_hash`,
