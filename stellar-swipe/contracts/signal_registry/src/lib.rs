@@ -17,6 +17,7 @@ mod ml_scoring;
 mod performance;
 mod query;
 pub mod reputation;
+mod reports;
 mod scheduling;
 mod scoring;
 mod social;
@@ -67,9 +68,9 @@ use stellar_swipe_common::{validate_asset_pair as validate_asset_pair_common, As
 pub use templates::{SignalTemplate, SignalTemplateOverrides, StoredSignalTemplate};
 use templates::{SignalTemplate, DEFAULT_TEMPLATE_EXPIRY_HOURS};
 use types::{
-    AddressMapping, Asset, CrossChainSignal, FeeBreakdown, ImportResultView, ProviderPerformance,
-    RecurrencePattern, Signal, SignalData, SignalEditInput, SignalOutcome, SignalPerformanceView,
-    SignalStatus, SignalSummary, SortOption, SyncStatus, TradeExecution,
+    AddressMapping, Asset, CrossChainSignal, FeeBreakdown, ImportResultView, ProviderMonthlyReport,
+    ProviderPerformance, RecurrencePattern, Signal, SignalData, SignalEditInput, SignalOutcome,
+    SignalPerformanceView, SignalStatus, SignalSummary, SortOption, SyncStatus, TradeExecution,
 };
 use versioning::{CopyRecord, SignalVersion};
 
@@ -1027,6 +1028,16 @@ impl SignalRegistry {
     pub fn get_provider_stats(env: Env, provider: Address) -> Option<ProviderPerformance> {
         let stats = Self::get_provider_stats_map(&env);
         stats.get(provider)
+    }
+
+    pub fn get_provider_monthly_report(
+        env: Env,
+        provider: Address,
+        month: u32,
+        year: u32,
+    ) -> types::ProviderMonthlyReport {
+        let signals = Self::get_signals_map(&env);
+        reports::get_provider_monthly_report(&env, &signals, &provider, month, year)
     }
 
     pub fn create_template(

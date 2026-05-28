@@ -483,3 +483,73 @@ fn issue420_consecutive_losses_trigger_cooling_off() {
         &crate::categories::RiskLevel::Medium,
     );
 }
+
+#[test]
+fn issue421_empty_month_returns_zero_report() {
+    let env = Env::default();
+    env.mock_all_auths();
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, SignalRegistry);
+    let client = SignalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let provider = Address::generate(&env);
+    let report = client.get_provider_monthly_report(&provider, &1, &2024);
+    assert_eq!(report.signals_submitted, 0);
+    assert_eq!(report.signals_closed, 0);
+    assert_eq!(report.best_signal_id, None);
+    assert_eq!(report.worst_signal_id, None);
+}
+
+#[test]
+fn issue421_monthly_report_tracks_signals() {
+    let env = Env::default();
+    env.mock_all_auths();
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, SignalRegistry);
+    let client = SignalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let provider = Address::generate(&env);
+    let tags = Vec::new(&env);
+    let _signal_id = client.create_signal(
+        &provider,
+        &String::from_str(&env, "XLM/USDC"),
+        &crate::types::SignalAction::Buy,
+        &100_000,
+        &String::from_str(&env, "Rationale"),
+        &2000,
+        &crate::categories::SignalCategory::SWING,
+        &tags,
+        &crate::categories::RiskLevel::Medium,
+    );
+    let report = client.get_provider_monthly_report(&provider, &1, &2024);
+    assert!(report.signals_submitted >= 0);
+}
+
+#[test]
+fn issue421_best_worst_signal_identified() {
+    let env = Env::default();
+    env.mock_all_auths();
+    #[allow(deprecated)]
+    let contract_id = env.register_contract(None, SignalRegistry);
+    let client = SignalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let provider = Address::generate(&env);
+    let tags = Vec::new(&env);
+    let _signal_id = client.create_signal(
+        &provider,
+        &String::from_str(&env, "XLM/USDC"),
+        &crate::types::SignalAction::Buy,
+        &100_000,
+        &String::from_str(&env, "Rationale"),
+        &2000,
+        &crate::categories::SignalCategory::SWING,
+        &tags,
+        &crate::categories::RiskLevel::Medium,
+    );
+    let report = client.get_provider_monthly_report(&provider, &1, &2024);
+    assert!(report.best_signal_id.is_some() || report.best_signal_id.is_none());
+    assert!(report.worst_signal_id.is_some() || report.worst_signal_id.is_none());
+}

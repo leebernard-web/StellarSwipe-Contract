@@ -89,6 +89,19 @@ pub struct Signal {
     pub alpha_bps: Option<i64>,
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProviderMonthlyReport {
+    pub signals_submitted: u32,
+    pub signals_closed: u32,
+    pub success_rate: u32,
+    pub total_adopters: u32,
+    pub fees_earned: i128,
+    pub reputation_change: i32,
+    pub best_signal_id: Option<u64>,
+    pub worst_signal_id: Option<u64>,
+}
+
 /// Legacy on-chain format (v1) before v2 added `submitted_at`, `rationale_hash`,
 /// `confidence`, and `adoption_count`. Used only for admin migration to [`Signal`].
 #[contracttype]
