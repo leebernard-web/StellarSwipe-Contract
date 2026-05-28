@@ -1602,6 +1602,26 @@ impl SignalRegistry {
         )
     }
 
+    pub fn get_active_signals_personalized(
+        env: Env,
+        user: Address,
+        offset: u32,
+        limit: u32,
+        sort_by: SortOption,
+        category_filter: Option<SignalCategory>,
+    ) -> Vec<SignalSummary> {
+        let signals_map = Self::get_signals_map(&env);
+        query::get_active_signals_personalized(
+            &env,
+            &signals_map,
+            user,
+            offset,
+            limit,
+            sort_by,
+            category_filter,
+        )
+    }
+
     /// Legacy fallback if front-ends rely on Old behavior
     /// (Wait, let's keep it as another name if needed, or just let users migrate to the new `get_active_signals`)
     pub fn get_active_signals_archived(
@@ -1635,7 +1655,7 @@ impl SignalRegistry {
         social::follow_provider(&env, user.clone(), provider.clone())
             .map_err(|_| AdminError::CannotFollowSelf)?;
 
-        // Update trust score when follower count changes
+        Self::sync_provider_social_metrics(&env, &provider);
         Self::update_provider_trust_score(env, provider);
 
         Ok(())
@@ -1646,7 +1666,7 @@ impl SignalRegistry {
         social::unfollow_provider(&env, user, provider.clone())
             .map_err(|_| AdminError::Unauthorized)?;
 
-        // Update trust score when follower count changes
+        Self::sync_provider_social_metrics(&env, &provider);
         Self::update_provider_trust_score(env, provider);
 
         Ok(())
@@ -1660,6 +1680,15 @@ impl SignalRegistry {
     /// Get follower count for a provider
     pub fn get_follower_count(env: Env, provider: Address) -> u32 {
         social::get_follower_count(&env, &provider)
+    }
+
+    fn sync_provider_social_metrics(env: &Env, provider: &Address) {
+        let mut stats_map = Self::get_provider_stats_map(env);
+        let mut stats = stats_map.get(provider.clone()).unwrap_or_default();
+        stats.follower_count = social::get_follower_count(env, provider);
+        stats_map.set(provider.clone(), stats.clone());
+        Self::save_provider_stats_map(env, &stats_map);
+        update_leaderboard_index(env, provider.clone(), &stats);
     }
 
     /// Cleanup expired signals in batches
@@ -2281,6 +2310,22 @@ impl SignalRegistry {
         events::emit_cross_chain_signal_requested(&env, source_chain, source_id, provider);
 
         Ok(())
+    }
+
+    pub fn get_cross_chain_signal(
+        env: Env,
+        source_chain: String,
+        source_id: String,
+    ) -> Option<CrossChainSignal> {
+        cross_chain::get_cross_chain_signal(&env, &source_chain, &source_id)
+    }
+
+    pub fn get_cross_chain_address_mapping(
+        env: Env,
+        source_chain: String,
+        source_address: String,
+    ) -> Option<AddressMapping> {
+        cross_chain::get_address_mapping(&env, &source_chain, &source_address)
     }
 
     pub fn import_verified_signal(

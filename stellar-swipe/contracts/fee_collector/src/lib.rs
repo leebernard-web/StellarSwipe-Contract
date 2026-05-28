@@ -14,7 +14,7 @@ use events::{
 mod rebates;
 
 mod reports;
-pub use reports::{EarningsReport, ReportPeriod};
+pub use reports::{EarningsLeaderboardEntry, EarningsReport, ReportPeriod};
 
 mod storage;
 use storage::{

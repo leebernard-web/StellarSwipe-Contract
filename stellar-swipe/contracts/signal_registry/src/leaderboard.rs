@@ -8,6 +8,7 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
+use crate::social;
 use crate::stake;
 use crate::types::ProviderPerformance;
 
@@ -220,16 +221,63 @@ pub fn get_provider_leaderboard(
 /// Legacy wrapper kept for backward-compat with existing get_leaderboard callers.
 pub fn get_leaderboard(
     env: &Env,
-    _stats_map: &soroban_sdk::Map<Address, ProviderPerformance>,
+    stats_map: &soroban_sdk::Map<Address, ProviderPerformance>,
     metric: LeaderboardMetric,
     limit: u32,
 ) -> Vec<ProviderLeaderboardEntry> {
-    let pm = match metric {
-        LeaderboardMetric::SuccessRate => ProviderMetric::BySuccessRate,
-        LeaderboardMetric::Volume => ProviderMetric::ByTotalProfitDelta,
-        LeaderboardMetric::Followers => return Vec::new(env),
-    };
-    get_provider_leaderboard(env, pm, limit)
+    match metric {
+        LeaderboardMetric::SuccessRate => get_provider_leaderboard(env, ProviderMetric::BySuccessRate, limit),
+        LeaderboardMetric::Volume => get_provider_leaderboard(env, ProviderMetric::ByTotalProfitDelta, limit),
+        LeaderboardMetric::Followers => get_followers_leaderboard(env, stats_map, limit),
+    }
+}
+
+fn get_followers_leaderboard(
+    env: &Env,
+    stats_map: &soroban_sdk::Map<Address, ProviderPerformance>,
+    limit: u32,
+) -> Vec<ProviderLeaderboardEntry> {
+    let mut providers: Vec<ProviderLeaderboardEntry> = Vec::new(env);
+    for key in stats_map.keys() {
+        if let Some(stats) = stats_map.get(key.clone()) {
+            let follower_count = social::get_follower_count(env, &key);
+            if follower_count == 0 {
+                continue;
+            }
+            let stake_amount = stake::get_stake_info(env, &key)
+                .as_ref()
+                .map(|s| s.amount)
+                .unwrap_or(0);
+            providers.push_back(ProviderLeaderboardEntry {
+                rank: 0,
+                provider: key.clone(),
+                metric_value: follower_count as i128,
+                total_signals: stats.total_signals,
+                verified: stake_amount >= stake::DEFAULT_MINIMUM_STAKE,
+            });
+        }
+    }
+
+    let len = providers.len();
+    for i in 0..len {
+        for j in 0..(len - i - 1) {
+            let curr = providers.get(j).unwrap();
+            let next = providers.get(j + 1).unwrap();
+            if curr.metric_value < next.metric_value {
+                providers.set(j, next);
+                providers.set(j + 1, curr);
+            }
+        }
+    }
+
+    let take = limit.min(providers.len());
+    let mut result = Vec::new(env);
+    for i in 0..take {
+        let mut entry = providers.get(i).unwrap();
+        entry.rank = i + 1;
+        result.push_back(entry);
+    }
+    result
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -259,6 +307,7 @@ mod tests {
             success_rate,
             avg_return,
             total_volume: 0,
+            follower_count: 0,
         }
     }
 

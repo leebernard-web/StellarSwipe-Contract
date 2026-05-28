@@ -2,6 +2,8 @@
 //! Hot path: sort + slice only over collected actives; avoid repeated `Map::keys()` work.
 
 use crate::categories::SignalCategory;
+use crate::reputation::get_trust_score;
+use crate::social;
 use crate::types::{Signal, SignalStatus, SignalSummary, SortOption};
 use soroban_sdk::{Address, Env, Map, Vec};
 
@@ -25,6 +27,30 @@ pub fn get_active_signals(
     limit: u32,
     sort_by: SortOption,
     _category_filter: Option<SignalCategory>,
+) -> Vec<SignalSummary> {
+    get_active_signals_internal(env, signals_map, provider_filter, offset, limit, sort_by, None)
+}
+
+pub fn get_active_signals_personalized(
+    env: &Env,
+    signals_map: &Map<u64, Signal>,
+    user: Address,
+    offset: u32,
+    limit: u32,
+    sort_by: SortOption,
+    _category_filter: Option<SignalCategory>,
+) -> Vec<SignalSummary> {
+    get_active_signals_internal(env, signals_map, None, offset, limit, sort_by, Some(user))
+}
+
+fn get_active_signals_internal(
+    env: &Env,
+    signals_map: &Map<u64, Signal>,
+    provider_filter: Option<Address>,
+    offset: u32,
+    limit: u32,
+    sort_by: SortOption,
+    user: Option<Address>,
 ) -> Vec<SignalSummary> {
     let mut active_signals = Vec::new(env);
     let current_time = env.ledger().timestamp();
@@ -69,7 +95,7 @@ pub fn get_active_signals(
     }
 
     // 2. Sort: bottom-up merge sort, same order as historical bubble/insertion (O(n log n) passes).
-    sort_feed_mergesort(env, &mut active_signals, total_active, &sort_by);
+    sort_feed_mergesort(env, &mut active_signals, total_active, &sort_by, user.as_ref());
 
     // 3. Paginate
     let mut results = Vec::new(env);
@@ -99,37 +125,52 @@ pub fn get_active_signals(
 }
 
 /// Same as historical bubble: returns true if **left** should move right (swap with **right**).
-fn should_swap_pair(curr: &Signal, next: &Signal, sort_by: &SortOption) -> bool {
+fn should_swap_pair(
+    env: &Env,
+    curr: &Signal,
+    next: &Signal,
+    sort_by: &SortOption,
+    user: Option<&Address>,
+) -> bool {
+    let curr_score = weighted_signal_score(env, curr, sort_by, user);
+    let next_score = weighted_signal_score(env, next, sort_by, user);
+    curr_score < next_score
+}
+
+fn weighted_signal_score(
+    env: &Env,
+    signal: &Signal,
+    sort_by: &SortOption,
+    user: Option<&Address>,
+) -> i128 {
+    let followed_boost = if let Some(ref u) = user {
+        if social::is_following(env, u, &signal.provider) {
+            1_000_000_000i128
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let follower_count = social::get_follower_count(env, &signal.provider) as i128;
+    let trust_score = get_trust_score(env, &signal.provider)
+        .map(|details| details.score as i128)
+        .unwrap_or(0);
+
+    let social_boost = follower_count.saturating_mul(5_000) + trust_score.saturating_mul(10);
+
     match *sort_by {
         SortOption::PerformanceDesc => {
-            let curr_success = if curr.executions > 0 {
-                (curr.successful_executions * 10_000) / curr.executions
+            let success_rate = if signal.executions > 0 {
+                (signal.successful_executions * 10_000) / signal.executions
             } else {
                 0
-            };
-            let next_success = if next.executions > 0 {
-                (next.successful_executions * 10_000) / next.executions
-            } else {
-                0
-            };
-            if curr_success < next_success {
-                true
-            } else if curr_success == next_success {
-                curr.timestamp < next.timestamp
-            } else {
-                false
-            }
+            } as i128;
+            success_rate * 1_000 + social_boost + followed_boost
         }
-        SortOption::RecencyDesc => curr.timestamp < next.timestamp,
-        SortOption::VolumeDesc => {
-            if curr.total_volume < next.total_volume {
-                true
-            } else if curr.total_volume == next.total_volume {
-                curr.timestamp < next.timestamp
-            } else {
-                false
-            }
-        }
+        SortOption::RecencyDesc => signal.timestamp as i128 * 10_000 + social_boost + followed_boost,
+        SortOption::VolumeDesc => signal.total_volume + social_boost * 10 + followed_boost / 100,
     }
 }
 
@@ -141,6 +182,7 @@ fn sort_feed_mergesort(
     v: &mut Vec<Signal>,
     n: u32,
     sort_by: &SortOption,
+    user: Option<&Address>,
 ) {
     if n <= 1 {
         return;
@@ -156,9 +198,11 @@ fn sort_feed_mergesort(
             let mut i1 = m;
             while i0 < m && i1 < e {
                 if !should_swap_pair(
+                    env,
                     &v.get(i0).unwrap(),
                     &v.get(i1).unwrap(),
                     sort_by,
+                    user,
                 ) {
                     nxt.push_back(v.get(i0).unwrap());
                     i0 += 1;
@@ -239,7 +283,7 @@ mod feed_tests {
             for j in 0..(total_active - i - 1) {
                 let curr = active_signals.get(j).unwrap();
                 let next = active_signals.get(j + 1).unwrap();
-                let should_swap = should_swap_pair(&curr, &next, sort_by);
+                let should_swap = should_swap_pair(env, &curr, &next, sort_by, None);
                 if should_swap {
                     active_signals.set(j, next);
                     active_signals.set(j + 1, curr);

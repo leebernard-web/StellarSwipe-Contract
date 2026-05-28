@@ -171,6 +171,7 @@ mod tests {
             success_rate,
             avg_return: 0,
             total_volume: 0,
+            follower_count: 0,
         }
     }
 

@@ -26,6 +26,10 @@ pub enum StorageKey {
     ProviderDailyFeeShares(Address, u64),
     /// Day number of the provider's first recorded earnings (for ALL_TIME period_start).
     ProviderEarningsFirstDay(Address),
+    /// Total accumulated fee shares for a provider, used to rank earnings leaders.
+    ProviderTotalEarnings(Address),
+    /// Providers that have recorded earnings, for leaderboard scans.
+    ProviderEarningsIndex,
     /// Whether a user has completed their first trade (Issue #428).
     HasTraded(Address),
     // ── Issue #438: Protocol Token Integration ─────────────────────
@@ -199,6 +203,41 @@ pub fn get_provider_daily_fee_shares(env: &Env, provider: &Address, day: u64) ->
         .unwrap_or(0i128)
 }
 
+pub fn get_provider_total_earnings(env: &Env, provider: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ProviderTotalEarnings(provider.clone()))
+        .unwrap_or(0i128)
+}
+
+pub fn get_provider_earnings_index(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ProviderEarningsIndex)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn add_provider_to_earnings_index(env: &Env, provider: &Address) {
+    let mut index = get_provider_earnings_index(env);
+    for i in 0..index.len() {
+        if index.get(i).unwrap() == *provider {
+            return;
+        }
+    }
+    index.push_back(provider.clone());
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ProviderEarningsIndex, &index);
+}
+
+pub fn add_provider_total_earnings(env: &Env, provider: &Address, amount: i128) {
+    let key = StorageKey::ProviderTotalEarnings(provider.clone());
+    let current: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
+    let updated = current.saturating_add(amount);
+    env.storage().persistent().set(&key, &updated);
+    add_provider_to_earnings_index(env, provider);
+}
+
 pub fn add_provider_daily_fee_shares(env: &Env, provider: &Address, day: u64, amount: i128) {
     let key = StorageKey::ProviderDailyFeeShares(provider.clone(), day);
     let current: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
@@ -210,6 +249,7 @@ pub fn add_provider_daily_fee_shares(env: &Env, provider: &Address, day: u64, am
     if !env.storage().persistent().has(&first_key) {
         env.storage().persistent().set(&first_key, &day);
     }
+    add_provider_total_earnings(env, provider, amount);
 }
 
 pub fn get_provider_earnings_first_day(env: &Env, provider: &Address) -> Option<u64> {

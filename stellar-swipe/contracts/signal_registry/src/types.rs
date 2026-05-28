@@ -168,6 +168,7 @@ pub struct ProviderPerformance {
     pub success_rate: u32,
     pub avg_return: i128,
     pub total_volume: i128,
+    pub follower_count: u32,
 }
 
 #[contracttype]

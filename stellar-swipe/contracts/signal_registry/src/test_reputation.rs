@@ -44,6 +44,7 @@ mod tests {
             success_rate,
             avg_return: 500,
             total_volume: 1000000,
+            follower_count: 0,
         }
     }
 
