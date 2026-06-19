@@ -6,12 +6,19 @@
 //!
 //! # Idempotency
 //! Each provider is written to V2 only once. Re-running the migration
-//! skips already-migrated providers (MigrationState tracks progress).
+//! skips already-migrated providers and providers in `pending_recovery`.
+//! `MigrationState.batch_number` increments on every call for correlation.
 //!
 //! # Checksum
 //! After writing each entry, the contract reads it back and asserts
-//! `new_balance == old_balance`. Any mismatch halts migration and emits
-//! `MigrationError`.
+//! `new_balance == old_balance`. A mismatch halts the current batch,
+//! records the provider in `pending_recovery`, and emits `MigrationError`.
+//!
+//! # Recovery
+//! Admin calls `recover_migration_entry` to set the verified V2 balance for a
+//! provider in `pending_recovery`, removing it from recovery and adding it to
+//! `migrated`. Migration is `complete` only when all V1 providers are in
+//! `migrated` (none remain in `pending_recovery`).
 
 #![allow(dead_code)]
 
@@ -45,10 +52,15 @@ pub struct StakeInfoV2 {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MigrationState {
-    /// Providers already migrated (in order).
+    /// Providers successfully migrated to V2.
     pub migrated: Vec<Address>,
     pub total_v1_providers: u32,
+    /// True only when all V1 providers are in `migrated` (none in `pending_recovery`).
     pub complete: bool,
+    /// Monotonically increasing per-call counter for event correlation.
+    pub batch_number: u32,
+    /// Providers that failed checksum verification; require `recover_migration_entry`.
+    pub pending_recovery: Vec<Address>,
 }
 
 /// Per-call result summary.
@@ -58,6 +70,18 @@ pub struct MigrationBatchResult {
     pub migrated_this_batch: u32,
     pub total_migrated: u32,
     pub complete: bool,
+    pub batch_number: u32,
+    pub pending_recovery_count: u32,
+}
+
+/// Result of a successful recovery operation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MigrationRecoveryResult {
+    pub provider: Address,
+    pub corrected_balance: i128,
+    pub remaining_recovery: u32,
+    pub migration_complete: bool,
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -67,6 +91,8 @@ pub enum MigrationError {
     Unauthorized,
     BalanceMismatch { provider: Address, old: i128, new: i128 },
     AlreadyComplete,
+    /// Provider is not in `pending_recovery`; nothing to recover.
+    NotInRecovery,
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
@@ -97,7 +123,29 @@ fn get_state(env: &Env) -> MigrationState {
             migrated: Vec::new(env),
             total_v1_providers: 0,
             complete: false,
+            batch_number: 0,
+            pending_recovery: Vec::new(env),
         })
+}
+
+fn is_in_vec(vec: &Vec<Address>, target: &Address) -> bool {
+    for i in 0..vec.len() {
+        if vec.get(i).unwrap() == *target {
+            return true;
+        }
+    }
+    false
+}
+
+fn remove_from_vec(env: &Env, vec: &Vec<Address>, target: &Address) -> Vec<Address> {
+    let mut result = Vec::new(env);
+    for i in 0..vec.len() {
+        let addr = vec.get(i).unwrap();
+        if addr != *target {
+            result.push_back(addr);
+        }
+    }
+    result
 }
 
 fn save_state(env: &Env, state: &MigrationState) {
@@ -122,12 +170,56 @@ fn emit_error(env: &Env, provider: Address, old_balance: i128, new_balance: i128
     );
 }
 
+fn emit_batch_start(env: &Env, batch_number: u32, pending_count: u32, recovery_count: u32) {
+    #[allow(deprecated)]
+    env.events().publish(
+        (symbol_short!("mig_start"),),
+        (batch_number, pending_count, recovery_count),
+    );
+}
+
+fn emit_batch_progress(
+    env: &Env,
+    batch_number: u32,
+    migrated_this_batch: u32,
+    total_migrated: u32,
+    total_v1: u32,
+    pending_recovery_count: u32,
+) {
+    #[allow(deprecated)]
+    env.events().publish(
+        (symbol_short!("mig_prog"),),
+        (batch_number, migrated_this_batch, total_migrated, total_v1, pending_recovery_count),
+    );
+}
+
+fn emit_migration_complete(env: &Env, total_migrated: u32) {
+    #[allow(deprecated)]
+    env.events().publish(
+        (symbol_short!("mig_done"),),
+        (total_migrated,),
+    );
+}
+
+fn emit_recovery(env: &Env, provider: Address, corrected_balance: i128, remaining_recovery: u32) {
+    #[allow(deprecated)]
+    env.events().publish(
+        (symbol_short!("mig_rec"), provider),
+        (corrected_balance, remaining_recovery),
+    );
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Migrate up to `batch_size` providers from V1 storage to V2.
 ///
-/// Must be called by `admin`. Halts on any balance mismatch.
-/// Safe to call multiple times — already-migrated providers are skipped.
+/// Must be called by `admin`. Halts on any balance mismatch — the failing
+/// provider is added to `pending_recovery` so subsequent batches skip it
+/// and migration can continue past the bad entry. Call
+/// `recover_migration_entry` to resolve stuck providers.
+///
+/// Safe to call multiple times — already-migrated and pending-recovery
+/// providers are both skipped, so partial batches resume cleanly.
 pub fn migrate_stakes_v1_to_v2(
     env: &Env,
     admin: &Address,
@@ -144,21 +236,20 @@ pub fn migrate_stakes_v1_to_v2(
     let mut v2 = get_v2(env);
     let now = env.ledger().timestamp();
 
-    // Build ordered list of V1 providers not yet migrated.
-    let already_migrated = &state.migrated;
+    // Snapshot total early so it is persisted even on early-exit paths.
+    let total_v1 = v1.len();
+    state.total_v1_providers = total_v1;
+
+    // Build pending list: V1 providers not yet migrated and not in pending_recovery.
     let mut pending: Vec<Address> = Vec::new(env);
     for key in v1.keys() {
-        let mut found = false;
-        for i in 0..already_migrated.len() {
-            if already_migrated.get(i).unwrap() == key {
-                found = true;
-                break;
-            }
-        }
-        if !found {
+        if !is_in_vec(&state.migrated, &key) && !is_in_vec(&state.pending_recovery, &key) {
             pending.push_back(key);
         }
     }
+
+    state.batch_number += 1;
+    emit_batch_start(env, state.batch_number, pending.len(), state.pending_recovery.len());
 
     let to_process = batch_size.min(pending.len());
     let mut migrated_this_batch = 0u32;
@@ -174,11 +265,12 @@ pub fn migrate_stakes_v1_to_v2(
         };
         v2.set(provider.clone(), info);
 
-        // Checksum: read back and verify.
+        // Checksum: read back and verify balance was written correctly.
         let written = v2.get(provider.clone()).unwrap();
         if written.balance != old_balance {
             emit_error(env, provider.clone(), old_balance, written.balance);
-            // Persist partial progress before halting.
+            // Park the failing provider so future batches skip it.
+            state.pending_recovery.push_back(provider.clone());
             save_v2(env, &v2);
             save_state(env, &state);
             return Err(MigrationError::BalanceMismatch {
@@ -193,17 +285,91 @@ pub fn migrate_stakes_v1_to_v2(
         migrated_this_batch += 1;
     }
 
-    let total_v1 = v1.len();
-    state.total_v1_providers = total_v1;
-    state.complete = state.migrated.len() >= total_v1;
+    // Complete only when every V1 provider is migrated and recovery queue is clear.
+    let all_accounted =
+        state.migrated.len() + state.pending_recovery.len() >= total_v1;
+    state.complete = all_accounted && state.pending_recovery.len() == 0;
 
     save_v2(env, &v2);
     save_state(env, &state);
 
+    let batch_number = state.batch_number;
+    let total_migrated = state.migrated.len();
+    let pending_recovery_count = state.pending_recovery.len();
+    let complete = state.complete;
+
+    emit_batch_progress(env, batch_number, migrated_this_batch, total_migrated, total_v1, pending_recovery_count);
+    if complete {
+        emit_migration_complete(env, total_migrated);
+    }
+
     Ok(MigrationBatchResult {
         migrated_this_batch,
-        total_migrated: state.migrated.len(),
-        complete: state.complete,
+        total_migrated,
+        complete,
+        batch_number,
+        pending_recovery_count,
+    })
+}
+
+/// Resolve a provider stuck in `pending_recovery` after a checksum mismatch.
+///
+/// Admin supplies `verified_balance` after independently auditing V1 data.
+/// The provider is removed from `pending_recovery`, written to V2 with the
+/// given balance, and added to `migrated`. If this was the last pending
+/// recovery and all V1 providers are accounted for, migration is marked
+/// complete and `mig_done` is emitted.
+pub fn recover_migration_entry(
+    env: &Env,
+    admin: &Address,
+    provider: Address,
+    verified_balance: i128,
+) -> Result<MigrationRecoveryResult, MigrationError> {
+    admin.require_auth();
+
+    let mut state = get_state(env);
+
+    if !is_in_vec(&state.pending_recovery, &provider) {
+        return Err(MigrationError::NotInRecovery);
+    }
+
+    let mut v2 = get_v2(env);
+    let now = env.ledger().timestamp();
+
+    v2.set(
+        provider.clone(),
+        StakeInfoV2 {
+            balance: verified_balance,
+            locked_until: 0,
+            last_updated: now,
+        },
+    );
+
+    state.pending_recovery = remove_from_vec(env, &state.pending_recovery, &provider);
+    state.migrated.push_back(provider.clone());
+
+    let total_v1 = state.total_v1_providers;
+    let all_accounted =
+        state.migrated.len() + state.pending_recovery.len() >= total_v1;
+    state.complete = all_accounted && state.pending_recovery.len() == 0;
+
+    let remaining_recovery = state.pending_recovery.len();
+    let migration_complete = state.complete;
+    let total_migrated = state.migrated.len();
+
+    save_v2(env, &v2);
+    save_state(env, &state);
+
+    emit_recovery(env, provider.clone(), verified_balance, remaining_recovery);
+    if migration_complete {
+        emit_migration_complete(env, total_migrated);
+    }
+
+    Ok(MigrationRecoveryResult {
+        provider,
+        corrected_balance: verified_balance,
+        remaining_recovery,
+        migration_complete,
     })
 }
 
@@ -217,6 +383,11 @@ pub fn seed_v1_stakes(env: &Env, stakes: Map<Address, i128>) {
 /// Read a V2 stake balance (post-migration).
 pub fn get_v2_balance(env: &Env, provider: &Address) -> Option<i128> {
     get_v2(env).get(provider.clone()).map(|s| s.balance)
+}
+
+/// Inspect the current migration progress (batch_number, migrated count, pending_recovery).
+pub fn get_migration_state(env: &Env) -> MigrationState {
+    get_state(env)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -237,7 +408,7 @@ mod tests {
     }
 
     /// Seed 50 providers into V1 and migrate them in two batches.
-    /// Verifies every balance is preserved exactly.
+    /// Verifies every balance is preserved exactly and batch_number increments.
     #[test]
     fn test_migrate_50_providers_balance_preservation() {
         let env = setup();
@@ -259,11 +430,14 @@ mod tests {
             // Batch 1: migrate 30
             let r1 = migrate_stakes_v1_to_v2(&env, &admin, 30).unwrap();
             assert_eq!(r1.migrated_this_batch, 30);
+            assert_eq!(r1.batch_number, 1);
+            assert_eq!(r1.pending_recovery_count, 0);
             assert!(!r1.complete);
 
             // Batch 2: migrate remaining 20
             let r2 = migrate_stakes_v1_to_v2(&env, &admin, 30).unwrap();
             assert_eq!(r2.migrated_this_batch, 20);
+            assert_eq!(r2.batch_number, 2);
             assert!(r2.complete);
             assert_eq!(r2.total_migrated, 50);
 
