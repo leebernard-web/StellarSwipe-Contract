@@ -20,7 +20,8 @@ pub use constants::{
 pub use emergency::PauseState;
 pub use health::{health_uninitialized, placeholder_admin, HealthStatus};
 pub use oracle::{
-    oracle_price_to_i128, validate_freshness, IOracleClient, MockOracleClient, OnChainOracleClient,
+    oracle_price_to_i128, validate_freshness, validate_oracle_price, validate_price_bounds,
+    IOracleClient, MAX_ORACLE_PRICE, MIN_ORACLE_PRICE, MockOracleClient, OnChainOracleClient,
     OracleError, OraclePrice,
 };
 pub use rate_limit::{

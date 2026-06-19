@@ -9,7 +9,8 @@
 
 use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 use stellar_swipe_common::oracle::{
-    IOracleClient, MockOracleClient, OnChainOracleClient, OracleError, OraclePrice,
+    validate_price_bounds, IOracleClient, MockOracleClient, OnChainOracleClient, OracleError,
+    OraclePrice,
 };
 
 use crate::admin::{AdminStorageKey, require_admin};
@@ -116,6 +117,7 @@ pub fn get_oracle_price(env: &Env, asset_pair: u32) -> Result<OraclePrice, Oracl
     let client = OnChainOracleClient { address };
     let price = client.get_price(env, asset_pair)?;
     validate_freshness(env, &price)?;
+    validate_price_bounds(&price)?;
     Ok(price)
 }
 
@@ -346,6 +348,7 @@ pub fn push_price_update(
     caller.require_auth();
     require_whitelisted_oracle(env, caller, asset_pair)?;
     validate_freshness(env, &price).map_err(|_| AutoTradeError::OracleUnavailable)?;
+    validate_price_bounds(&price).map_err(|_| AutoTradeError::OracleUnavailable)?;
 
     let scaled = oracle_price_to_i128(&price);
     crate::risk::set_asset_price(env, asset_pair, scaled);

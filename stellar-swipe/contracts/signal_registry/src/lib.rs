@@ -1213,6 +1213,16 @@ impl SignalRegistry {
             return Err(errors::PerformanceError::InvalidVolume);
         }
 
+        // Oracle price sanity: prices must not exceed 10^18.
+        // Prevents overflow in `calculate_roi` which multiplies price_diff by
+        // BASIS_POINTS_DENOMINATOR (10 000). Mirrors MAX_ORACLE_PRICE in
+        // stellar_swipe_common::oracle so settlement rejects the same values
+        // that the oracle layer would reject at ingestion time.
+        const MAX_SETTLEMENT_PRICE: i128 = 1_000_000_000_000_000_000;
+        if entry_price > MAX_SETTLEMENT_PRICE || exit_price > MAX_SETTLEMENT_PRICE {
+            return Err(errors::PerformanceError::OraclePriceOutOfBounds);
+        }
+
         // Load signal
         let mut signals = Self::get_signals_map(&env);
         let mut signal = signals

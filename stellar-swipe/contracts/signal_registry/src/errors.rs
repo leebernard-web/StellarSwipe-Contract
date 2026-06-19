@@ -69,6 +69,16 @@ pub enum PerformanceError {
     SignalExpired = 204,
     NoExecutions = 205,
     TradingPaused = 206,
+    /// Entry or exit price is older than the acceptable staleness window.
+    /// Matches `OracleError::PriceStale` from the oracle contract.
+    OraclePriceStale = 207,
+    /// No oracle price has been published for this asset pair
+    /// (timestamp == 0). Matches `OracleError::PriceNotFound`.
+    OraclePriceMissing = 208,
+    /// Price is outside `[MIN_ORACLE_PRICE, MAX_ORACLE_PRICE]`.
+    /// A zero/negative price signals a corrupt feed; an excessively large
+    /// price would overflow basis-point ROI calculations.
+    OraclePriceOutOfBounds = 209,
 }
 
 #[contracterror]
