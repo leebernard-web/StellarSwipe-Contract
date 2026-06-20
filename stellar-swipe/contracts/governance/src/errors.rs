@@ -54,5 +54,23 @@ pub enum GovernanceError {
     ActionNotFound = 48,
     InvalidTimelockConfig = 49,
     ConvictionPoolNotFound = 50,
+ feat/treasury-budget-caps
+    /// Fewer eligible voters participated in a committee election than the
+    /// configured minimum quorum requires.  The election is voided and the
+    /// committee keeps its existing members.
+    ElectionQuorumNotMet = 51,
+    /// A vote submitted to a committee election was structurally invalid —
+    /// for example the candidate was not on the ballot.  This error is
+    /// returned so callers can diagnose the problem; internally the ballot is
+    /// rejected without mutating election state.
+    InvalidElectionVote = 52,
+    /// A treasury spend was attempted for a budget category that has not yet
+    /// received a governance-approved budget cap via `approve_treasury_budget`.
+    BudgetApprovalRequired = 53,
+    /// The requested spend would cause the category's total governance-approved
+    /// cap to be exceeded.
+    ApprovedCapExceeded = 54,
+
     InvalidCalibrationConfig = 51,
+main
 }

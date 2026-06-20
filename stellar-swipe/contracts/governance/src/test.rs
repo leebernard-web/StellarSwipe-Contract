@@ -5,9 +5,9 @@ use crate::distribution::{
     TEAM_VESTING_DURATION, YEAR_SECONDS,
 };
 use crate::{
-    Authority, CommitteeAction, CrossCommitteeStatus, DecisionStatus, EmergencyActionAuthority,
-    EmergencyActionPayload, GovernanceContract, GovernanceContractClient, GovernanceError,
-    ParameterAdjustmentAuthority, RewardConfigUpdateAction, TreasurySpendAction,
+    Authority, CommitteeAction, CommitteeElectionStatus, CrossCommitteeStatus, DecisionStatus,
+    EmergencyActionAuthority, EmergencyActionPayload, GovernanceContract, GovernanceContractClient,
+    GovernanceError, ParameterAdjustmentAuthority, RewardConfigUpdateAction, TreasurySpendAction,
     TreasurySpendAuthority, VoteType,
 };
 use crate::proposals::{GovernanceConfig, ProposalStatus, ProposalType, VoteType as GovernanceVoteType};
@@ -301,6 +301,13 @@ fn treasury_spend_updates_budget_balances_and_history() {
         &100u64,
         &false,
     );
+    // governance approval must exist before spending
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "operations"),
+        &114u64,
+        &600i128,
+    );
 
     let spend = client.execute_treasury_spend(
         &admin,
@@ -342,6 +349,13 @@ fn recurring_payments_reporting_and_rebalance_are_tracked() {
         &0u64,
         &20u64,
         &true,
+    );
+    // governance must approve before recurring payments can be scheduled or executed
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "grants"),
+        &1u64,
+        &500i128,
     );
     client.create_recurring_payment(
         &admin,
@@ -392,6 +406,12 @@ fn recurring_payment_is_paused_when_balance_is_insufficient() {
         &0u64,
         &20u64,
         &true,
+    );
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "operations"),
+        &2u64,
+        &500i128,
     );
     client.create_recurring_payment(
         &admin,
@@ -445,6 +465,13 @@ fn committee_executes_delegated_treasury_spend_and_reports_metrics() {
         &0u64,
         &(365u64 * 86_400),
         &true,
+    );
+    // governance must approve the "technical" budget cap before any spend
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "technical"),
+        &1u64,
+        &20_000i128,
     );
 
     let committee_members = members(&env, 5);
@@ -619,7 +646,7 @@ fn committee_election_replaces_members_and_updates_chair() {
         &Some(90u32),
     );
 
-    client.start_committee_election(&admin, &committee.id, &3u32, &7u32);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
 
     let candidate_one = Address::generate(&env);
     let candidate_two = Address::generate(&env);
@@ -634,9 +661,12 @@ fn committee_election_replaces_members_and_updates_chair() {
     client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_two);
 
     env.ledger().set_timestamp(8 * 86_400);
-    let winners = client.finalize_committee_election(&admin, &committee.id);
-    assert_eq!(winners.len(), 3);
-    assert_eq!(winners.get(0).unwrap(), candidate_one);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.winners.len(), 3);
+    assert_eq!(result.winners.get(0).unwrap(), candidate_one);
+    assert_eq!(result.valid_votes, 3);
+    assert_eq!(result.rejected_votes, 0);
 
     let updated = client.committee(&committee.id);
     assert_eq!(updated.members.len(), 3);
@@ -1249,6 +1279,662 @@ mod event_format_tests {
         assert_eq!(contract, Symbol::new(&env, "governance"));
         assert_eq!(event, Symbol::new(&env, "vesting_released"));
     }
+ feat/treasury-budget-caps
+}
+
+// ── Committee election: quorum, invalid-vote, and success tests ──────────
+
+/// Helper: build a committee with EmergencyAction authority and return
+/// (committee, chair) so election tests don't repeat boilerplate.
+fn make_election_committee<'a>(
+    env: &'a Env,
+    client: &GovernanceContractClient<'a>,
+    admin: &Address,
+) -> (crate::Committee, Address) {
+    let mems = members(env, 5);
+    let chair = mems.get(0).unwrap();
+    let authorities = soroban_sdk::vec![
+        env,
+        Authority::EmergencyAction(EmergencyActionAuthority {
+            action_types: soroban_sdk::vec![env, String::from_str(env, "incident")],
+        })
+    ];
+    let committee = client.create_committee(
+        admin,
+        &String::from_str(env, "Test Committee"),
+        &String::from_str(env, "Election test committee"),
+        &mems,
+        &chair,
+        &5u32,
+        &authorities,
+        &Some(90u32),
+    );
+    (committee, chair)
+}
+
+#[test]
+fn election_fails_when_voter_participation_below_quorum() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Give voters staked balance
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Require at least 3 participating voters — we'll only cast 1 vote
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &3u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // Only 1 voter participates (below quorum of 3)
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::FailedQuorumParticipation);
+    assert_eq!(result.winners.len(), 0);
+    assert_eq!(result.valid_votes, 1);
+    assert_eq!(result.rejected_votes, 0);
+
+    // Committee membership must be unchanged
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.members.len(), 5, "existing members must be preserved on quorum failure");
+}
+
+#[test]
+fn election_fails_when_stake_weight_below_quorum_threshold() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Small stakes — well below our threshold
+    client.stake(&recipients.community_rewards, &1_000);
+    client.stake(&recipients.public_sale, &1_000);
+    client.stake(&recipients.treasury, &1_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Quorum stake threshold: 500_000 (far above what's staked)
+    client.start_committee_election(
+        &admin,
+        &committee.id,
+        &3u32,
+        &7u32,
+        &0u32,        // no participation quorum
+        &500_000i128, // high stake-weight quorum
+    );
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_two);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_three);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::FailedQuorumStake);
+    assert_eq!(result.winners.len(), 0);
+    // Total stake weight = 3 × 1_000 = 3_000 — well below 500_000
+    assert!(result.total_stake_weight < 500_000);
+
+    // Committee membership must be unchanged
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.members.len(), 5, "existing members must be preserved on stake quorum failure");
+}
+
+#[test]
+fn vote_for_unknown_candidate_is_rejected_with_invalid_vote_error() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let unknown_candidate = Address::generate(&env); // not nominated
+
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+
+    // Attempt to vote for a candidate not on the ballot
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &unknown_candidate,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::InvalidElectionVote)));
+
+    // Election votes map must be unmodified (no phantom vote recorded)
+    let election = client.committee_election(&committee.id);
+    assert_eq!(
+        election.votes.len(),
+        0,
+        "no vote should be recorded for an invalid candidate"
+    );
+}
+
+#[test]
+fn vote_from_unstaked_address_is_rejected_with_invalid_vote_error() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Do NOT stake recipients.community_rewards
+    client.stake(&recipients.public_sale, &50_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.public_sale);
+
+    // Unstaked voter — must be rejected cleanly
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards, // no staked balance
+        &candidate_one,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::InvalidElectionVote)));
+
+    // Election state must be unmodified
+    let election = client.committee_election(&committee.id);
+    assert_eq!(
+        election.votes.len(),
+        0,
+        "unstaked voter must not be recorded in election votes"
+    );
+}
+
+#[test]
+fn duplicate_vote_is_rejected_without_corrupting_election_state() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+
+    // First vote — should succeed
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    // Second vote from same voter — must be rejected
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::AlreadyVoted)));
+
+    // Exactly 1 vote must be recorded, not 2
+    let election = client.committee_election(&committee.id);
+    assert_eq!(election.votes.len(), 1, "only one vote should be recorded per voter");
+}
+
+#[test]
+fn election_result_exposes_rejected_vote_count() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Give several voters staked balances
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    // No quorum requirements so we can observe the count freely
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // All three cast valid votes
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_two);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_three);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.valid_votes, 3);
+    assert_eq!(result.rejected_votes, 0);
+    assert_eq!(result.winners.len(), 3);
+    assert!(result.total_stake_weight > 0);
+}
+
+#[test]
+fn successful_election_with_both_quorum_thresholds_met() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Both quorum conditions; total staked = 190_000_000 so 100_000_000 threshold is met
+    client.start_committee_election(
+        &admin,
+        &committee.id,
+        &3u32,
+        &7u32,
+        &2u32,          // need at least 2 voters
+        &100_000_000i128, // need at least 100_000_000 total stake weight
+    );
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_one);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_two);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.valid_votes, 3);
+    assert!(result.total_stake_weight >= 100_000_000);
+    assert_eq!(result.winners.len(), 3);
+    // Top vote-getter (candidate_one with 150_000_000 weight) becomes chair
+    assert_eq!(result.winners.get(0).unwrap(), candidate_one);
+
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.chair, candidate_one);
+    assert_eq!(updated.members.len(), 3);
+}
+
+#[test]
+fn election_can_be_restarted_after_quorum_failure() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // First election — strict participation quorum that won't be met
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &5u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // Only 1 vote cast — quorum requires 5
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let first_result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(first_result.status, CommitteeElectionStatus::FailedQuorumParticipation);
+
+    // After a failed election the record is cleared; a new election can be started
+    // (advance time so the new election isn't blocked by a running election)
+    env.ledger().set_timestamp(9 * 86_400);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &1u32, &0i128);
+
+    let new_c1 = Address::generate(&env);
+    let new_c2 = Address::generate(&env);
+    let new_c3 = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &new_c1, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &new_c2, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &new_c3, &recipients.treasury);
+
+    client.vote_in_committee_election(&committee.id, &recipients.community_rewards, &new_c1);
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &new_c1);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &new_c2);
+
+    env.ledger().set_timestamp(17 * 86_400);
+    let second_result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(second_result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(second_result.winners.get(0).unwrap(), new_c1);
+}
+
+// ── Treasury budget-cap guardrail integration tests ──────────────────────
+
+/// Spending without calling `approve_treasury_budget` first returns
+/// `BudgetApprovalRequired`.
+#[test]
+fn spend_without_approval_is_rejected() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let xlm = asset(&env, "XLM");
+    client.set_treasury_asset(&admin, &xlm, &1_000i128);
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &500i128,
+        &500i128,
+        &0u64,
+        &100u64,
+        &false,
+    );
+    // No approve_treasury_budget call
+
+    let result = client.try_execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &100i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "test"),
+        &None,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::BudgetApprovalRequired)));
+}
+
+/// A spend that would push cumulative drawn past the approved cap returns
+/// `ApprovedCapExceeded`.
+#[test]
+fn spend_exceeding_approved_cap_is_rejected() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let xlm = asset(&env, "XLM");
+    client.set_treasury_asset(&admin, &xlm, &1_000i128);
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &500i128,
+        &500i128,
+        &0u64,
+        &100u64,
+        &false,
+    );
+    // Governance approves only 200 out of 500 allocated
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &10u64,
+        &200i128,
+    );
+
+    // First draw of 150 succeeds (drawn: 150 ≤ cap 200)
+    client.execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &150i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "hosting"),
+        &Some(10u64),
+    );
+
+    // Second draw of 100 would push drawn to 250 > cap 200
+    let result = client.try_execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &100i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "extra"),
+        &Some(10u64),
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::ApprovedCapExceeded)));
+}
+
+/// `approve_treasury_budget` with a cap greater than `allocated` fails.
+#[test]
+fn approve_cap_exceeding_allocated_is_rejected() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &200i128,
+        &200i128,
+        &0u64,
+        &100u64,
+        &false,
+    );
+
+    let result = client.try_approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &5u64,
+        &500i128, // 500 > allocated 200
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::BudgetExceeded)));
+}
+
+/// Re-approving a category with a new proposal resets `total_drawn`,
+/// allowing further spending under the fresh cap.
+#[test]
+fn re_approval_resets_drawn_and_allows_new_spending() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let xlm = asset(&env, "XLM");
+    client.set_treasury_asset(&admin, &xlm, &1_000i128);
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &500i128,
+        &500i128,
+        &0u64,
+        &100u64,
+        &false,
+    );
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &20u64,
+        &300i128,
+    );
+
+    // Draw down to the cap
+    client.execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &300i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "batch"),
+        &Some(20u64),
+    );
+
+    // Any further spend is rejected
+    let rejected = client.try_execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &1i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "over"),
+        &Some(20u64),
+    );
+    assert_eq!(rejected, Err(Ok(GovernanceError::ApprovedCapExceeded)));
+
+    // New governance proposal approves another 150
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &21u64,
+        &150i128,
+    );
+
+    // Spending is now allowed again
+    let spend = client.execute_treasury_spend(
+        &admin,
+        &Address::generate(&env),
+        &100i128,
+        &xlm,
+        &String::from_str(&env, "ops"),
+        &String::from_str(&env, "renewed"),
+        &Some(21u64),
+    );
+    assert_eq!(spend.amount, 100);
+
+    let treasury = client.treasury();
+    let approval = treasury
+        .approved_budgets
+        .get(String::from_str(&env, "ops"))
+        .unwrap();
+    assert_eq!(approval.proposal_id, 21);
+    assert_eq!(approval.total_drawn, 100);
+}
+
+/// `approve_treasury_budget` on a non-existent category returns `BudgetNotFound`.
+#[test]
+fn approve_nonexistent_budget_is_rejected() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let result = client.try_approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "ghost"),
+        &99u64,
+        &100i128,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::BudgetNotFound)));
+}
+
+/// A recurring payment is deactivated when the approved cap is exhausted.
+#[test]
+fn recurring_payment_paused_when_approved_cap_exhausted() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let usdc = asset(&env, "USDC");
+    client.set_treasury_asset(&admin, &usdc, &1_000i128);
+    // Budget allows 400; governance only approved 150 (covers one 100-unit payment)
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "grants"),
+        &400i128,
+        &200i128,
+        &0u64,
+        &100u64,
+        &true,
+    );
+    client.approve_treasury_budget(
+        &admin,
+        &String::from_str(&env, "grants"),
+        &30u64,
+        &150i128,
+    );
+    client.create_recurring_payment(
+        &admin,
+        &Address::generate(&env),
+        &100i128,
+        &usdc,
+        &10u64,
+        &String::from_str(&env, "grants"),
+        &String::from_str(&env, "stipend"),
+        &None,
+        &Some(200u64),
+    );
+
+    // t=10: first payment — drawn 0 → 100 ≤ cap 150 ✓
+    env.ledger().set_timestamp(10);
+    assert_eq!(client.process_recurring_payments(&admin), 1);
+
+    // t=20: second payment would push drawn to 200 > cap 150 → deactivated
+    env.ledger().set_timestamp(20);
+    assert_eq!(client.process_recurring_payments(&admin), 0);
+
+    let treasury = client.treasury();
+    assert!(!treasury.recurring_payments.get(0).unwrap().active);
+}
+
+/// Non-admin cannot call `approve_treasury_budget`.
+#[test]
+fn non_admin_cannot_approve_budget() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.create_budget(
+        &admin,
+        &String::from_str(&env, "ops"),
+        &500i128,
+        &500i128,
+        &0u64,
+        &100u64,
+        &false,
+    );
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_approve_treasury_budget(
+        &non_admin,
+        &String::from_str(&env, "ops"),
+        &1u64,
+        &100i128,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::Unauthorized)));
+}
+=======
 
     // ── Conviction Calibration tests ─────────────────────────────────────
 
@@ -1521,3 +2207,4 @@ mod event_format_tests {
         assert_eq!(conviction, 1);
     }
 
+ main
