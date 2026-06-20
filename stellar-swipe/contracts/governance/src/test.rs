@@ -5,9 +5,9 @@ use crate::distribution::{
     TEAM_VESTING_DURATION, YEAR_SECONDS,
 };
 use crate::{
-    Authority, CommitteeAction, CrossCommitteeStatus, DecisionStatus, EmergencyActionAuthority,
-    EmergencyActionPayload, GovernanceContract, GovernanceContractClient, GovernanceError,
-    ParameterAdjustmentAuthority, RewardConfigUpdateAction, TreasurySpendAction,
+    Authority, CommitteeAction, CommitteeElectionStatus, CrossCommitteeStatus, DecisionStatus,
+    EmergencyActionAuthority, EmergencyActionPayload, GovernanceContract, GovernanceContractClient,
+    GovernanceError, ParameterAdjustmentAuthority, RewardConfigUpdateAction, TreasurySpendAction,
     TreasurySpendAuthority, VoteType,
 };
 use crate::proposals::{GovernanceConfig, ProposalStatus, ProposalType, VoteType as GovernanceVoteType};
@@ -619,7 +619,7 @@ fn committee_election_replaces_members_and_updates_chair() {
         &Some(90u32),
     );
 
-    client.start_committee_election(&admin, &committee.id, &3u32, &7u32);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
 
     let candidate_one = Address::generate(&env);
     let candidate_two = Address::generate(&env);
@@ -634,9 +634,12 @@ fn committee_election_replaces_members_and_updates_chair() {
     client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_two);
 
     env.ledger().set_timestamp(8 * 86_400);
-    let winners = client.finalize_committee_election(&admin, &committee.id);
-    assert_eq!(winners.len(), 3);
-    assert_eq!(winners.get(0).unwrap(), candidate_one);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.winners.len(), 3);
+    assert_eq!(result.winners.get(0).unwrap(), candidate_one);
+    assert_eq!(result.valid_votes, 3);
+    assert_eq!(result.rejected_votes, 0);
 
     let updated = client.committee(&committee.id);
     assert_eq!(updated.members.len(), 3);
@@ -1249,4 +1252,375 @@ mod event_format_tests {
         assert_eq!(contract, Symbol::new(&env, "governance"));
         assert_eq!(event, Symbol::new(&env, "vesting_released"));
     }
+}
+
+// ── Committee election: quorum, invalid-vote, and success tests ──────────
+
+/// Helper: build a committee with EmergencyAction authority and return
+/// (committee, chair) so election tests don't repeat boilerplate.
+fn make_election_committee<'a>(
+    env: &'a Env,
+    client: &GovernanceContractClient<'a>,
+    admin: &Address,
+) -> (crate::Committee, Address) {
+    let mems = members(env, 5);
+    let chair = mems.get(0).unwrap();
+    let authorities = soroban_sdk::vec![
+        env,
+        Authority::EmergencyAction(EmergencyActionAuthority {
+            action_types: soroban_sdk::vec![env, String::from_str(env, "incident")],
+        })
+    ];
+    let committee = client.create_committee(
+        admin,
+        &String::from_str(env, "Test Committee"),
+        &String::from_str(env, "Election test committee"),
+        &mems,
+        &chair,
+        &5u32,
+        &authorities,
+        &Some(90u32),
+    );
+    (committee, chair)
+}
+
+#[test]
+fn election_fails_when_voter_participation_below_quorum() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Give voters staked balance
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Require at least 3 participating voters — we'll only cast 1 vote
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &3u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // Only 1 voter participates (below quorum of 3)
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::FailedQuorumParticipation);
+    assert_eq!(result.winners.len(), 0);
+    assert_eq!(result.valid_votes, 1);
+    assert_eq!(result.rejected_votes, 0);
+
+    // Committee membership must be unchanged
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.members.len(), 5, "existing members must be preserved on quorum failure");
+}
+
+#[test]
+fn election_fails_when_stake_weight_below_quorum_threshold() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Small stakes — well below our threshold
+    client.stake(&recipients.community_rewards, &1_000);
+    client.stake(&recipients.public_sale, &1_000);
+    client.stake(&recipients.treasury, &1_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Quorum stake threshold: 500_000 (far above what's staked)
+    client.start_committee_election(
+        &admin,
+        &committee.id,
+        &3u32,
+        &7u32,
+        &0u32,        // no participation quorum
+        &500_000i128, // high stake-weight quorum
+    );
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_two);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_three);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::FailedQuorumStake);
+    assert_eq!(result.winners.len(), 0);
+    // Total stake weight = 3 × 1_000 = 3_000 — well below 500_000
+    assert!(result.total_stake_weight < 500_000);
+
+    // Committee membership must be unchanged
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.members.len(), 5, "existing members must be preserved on stake quorum failure");
+}
+
+#[test]
+fn vote_for_unknown_candidate_is_rejected_with_invalid_vote_error() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let unknown_candidate = Address::generate(&env); // not nominated
+
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+
+    // Attempt to vote for a candidate not on the ballot
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &unknown_candidate,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::InvalidElectionVote)));
+
+    // Election votes map must be unmodified (no phantom vote recorded)
+    let election = client.committee_election(&committee.id);
+    assert_eq!(
+        election.votes.len(),
+        0,
+        "no vote should be recorded for an invalid candidate"
+    );
+}
+
+#[test]
+fn vote_from_unstaked_address_is_rejected_with_invalid_vote_error() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Do NOT stake recipients.community_rewards
+    client.stake(&recipients.public_sale, &50_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.public_sale);
+
+    // Unstaked voter — must be rejected cleanly
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards, // no staked balance
+        &candidate_one,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::InvalidElectionVote)));
+
+    // Election state must be unmodified
+    let election = client.committee_election(&committee.id);
+    assert_eq!(
+        election.votes.len(),
+        0,
+        "unstaked voter must not be recorded in election votes"
+    );
+}
+
+#[test]
+fn duplicate_vote_is_rejected_without_corrupting_election_state() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+
+    // First vote — should succeed
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    // Second vote from same voter — must be rejected
+    let result = client.try_vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::AlreadyVoted)));
+
+    // Exactly 1 vote must be recorded, not 2
+    let election = client.committee_election(&committee.id);
+    assert_eq!(election.votes.len(), 1, "only one vote should be recorded per voter");
+}
+
+#[test]
+fn election_result_exposes_rejected_vote_count() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    // Give several voters staked balances
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+    // No quorum requirements so we can observe the count freely
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &0u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // All three cast valid votes
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_two);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_three);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.valid_votes, 3);
+    assert_eq!(result.rejected_votes, 0);
+    assert_eq!(result.winners.len(), 3);
+    assert!(result.total_stake_weight > 0);
+}
+
+#[test]
+fn successful_election_with_both_quorum_thresholds_met() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // Both quorum conditions; total staked = 190_000_000 so 100_000_000 threshold is met
+    client.start_committee_election(
+        &admin,
+        &committee.id,
+        &3u32,
+        &7u32,
+        &2u32,          // need at least 2 voters
+        &100_000_000i128, // need at least 100_000_000 total stake weight
+    );
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &candidate_one);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &candidate_two);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let result = client.finalize_committee_election(&admin, &committee.id);
+
+    assert_eq!(result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(result.valid_votes, 3);
+    assert!(result.total_stake_weight >= 100_000_000);
+    assert_eq!(result.winners.len(), 3);
+    // Top vote-getter (candidate_one with 150_000_000 weight) becomes chair
+    assert_eq!(result.winners.get(0).unwrap(), candidate_one);
+
+    let updated = client.committee(&committee.id);
+    assert_eq!(updated.chair, candidate_one);
+    assert_eq!(updated.members.len(), 3);
+}
+
+#[test]
+fn election_can_be_restarted_after_quorum_failure() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    client.stake(&recipients.community_rewards, &100_000_000);
+    client.stake(&recipients.public_sale, &50_000_000);
+    client.stake(&recipients.treasury, &40_000_000);
+
+    let (committee, _) = make_election_committee(&env, &client, &admin);
+
+    // First election — strict participation quorum that won't be met
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &5u32, &0i128);
+
+    let candidate_one = Address::generate(&env);
+    let candidate_two = Address::generate(&env);
+    let candidate_three = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &candidate_two, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &candidate_three, &recipients.treasury);
+
+    // Only 1 vote cast — quorum requires 5
+    client.vote_in_committee_election(
+        &committee.id,
+        &recipients.community_rewards,
+        &candidate_one,
+    );
+
+    env.ledger().set_timestamp(8 * 86_400);
+    let first_result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(first_result.status, CommitteeElectionStatus::FailedQuorumParticipation);
+
+    // After a failed election the record is cleared; a new election can be started
+    // (advance time so the new election isn't blocked by a running election)
+    env.ledger().set_timestamp(9 * 86_400);
+    client.start_committee_election(&admin, &committee.id, &3u32, &7u32, &1u32, &0i128);
+
+    let new_c1 = Address::generate(&env);
+    let new_c2 = Address::generate(&env);
+    let new_c3 = Address::generate(&env);
+    client.nominate_for_committee(&committee.id, &new_c1, &recipients.community_rewards);
+    client.nominate_for_committee(&committee.id, &new_c2, &recipients.public_sale);
+    client.nominate_for_committee(&committee.id, &new_c3, &recipients.treasury);
+
+    client.vote_in_committee_election(&committee.id, &recipients.community_rewards, &new_c1);
+    client.vote_in_committee_election(&committee.id, &recipients.public_sale, &new_c1);
+    client.vote_in_committee_election(&committee.id, &recipients.treasury, &new_c2);
+
+    env.ledger().set_timestamp(17 * 86_400);
+    let second_result = client.finalize_committee_election(&admin, &committee.id);
+    assert_eq!(second_result.status, CommitteeElectionStatus::Succeeded);
+    assert_eq!(second_result.winners.get(0).unwrap(), new_c1);
 }

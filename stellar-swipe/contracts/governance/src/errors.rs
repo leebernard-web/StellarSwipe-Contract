@@ -54,4 +54,13 @@ pub enum GovernanceError {
     ActionNotFound = 48,
     InvalidTimelockConfig = 49,
     ConvictionPoolNotFound = 50,
+    /// Fewer eligible voters participated in a committee election than the
+    /// configured minimum quorum requires.  The election is voided and the
+    /// committee keeps its existing members.
+    ElectionQuorumNotMet = 51,
+    /// A vote submitted to a committee election was structurally invalid —
+    /// for example the candidate was not on the ballot.  This error is
+    /// returned so callers can diagnose the problem; internally the ballot is
+    /// rejected without mutating election state.
+    InvalidElectionVote = 52,
 }

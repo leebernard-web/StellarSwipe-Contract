@@ -20,13 +20,15 @@ mod test_health;
 
 use committees::{
     list_committees as list_registered_committees, CommitteeAction, CommitteeElection,
-    CommitteeReport, CommitteesState, CrossCommitteeRequest, VoteType,
+    CommitteeReport, CommitteesState, CrossCommitteeRequest, ElectionResult, ElectionStatus,
+    VoteType,
 };
 pub use committees::{
     Authority, Committee, CommitteeDecision, CrossCommitteeStatus, DecisionStatus,
     EmergencyActionAuthority, EmergencyActionPayload, GrantApprovalAction, GrantApprovalAuthority,
     ParameterAdjustmentAuthority, PerformanceMetrics, RewardConfigUpdateAction,
     TreasurySpendAction, TreasurySpendAuthority, VetoAuthority, VetoPayload,
+    ElectionResult as CommitteeElectionResult, ElectionStatus as CommitteeElectionStatus,
 };
 use conviction_voting::{
     analyze_conviction_proposal, change_conviction_vote, create_conviction_pool,
@@ -1106,6 +1108,8 @@ impl GovernanceContract {
         committee_id: u64,
         positions_available: u32,
         duration_days: u32,
+        min_participation: u32,
+        quorum_stake_threshold: i128,
     ) -> Result<CommitteeElection, GovernanceError> {
         require_admin(&env, &admin)?;
         let mut committees_state = get_committees_state(&env);
@@ -1115,6 +1119,8 @@ impl GovernanceContract {
             committee_id,
             positions_available,
             duration_days,
+            min_participation,
+            quorum_stake_threshold,
         )?;
         put_committees_state(&env, &committees_state);
         emit_admin_action(
@@ -1179,10 +1185,10 @@ impl GovernanceContract {
         env: Env,
         admin: Address,
         committee_id: u64,
-    ) -> Result<Vec<Address>, GovernanceError> {
+    ) -> Result<CommitteeElectionResult, GovernanceError> {
         require_admin(&env, &admin)?;
         let mut committees_state = get_committees_state(&env);
-        let winners = committees::finalize_election(&env, &mut committees_state, committee_id)?;
+        let result = committees::finalize_election(&env, &mut committees_state, committee_id)?;
         put_committees_state(&env, &committees_state);
         emit_admin_action(
             &env,
@@ -1190,7 +1196,7 @@ impl GovernanceContract {
             &admin,
             committee_id as i128,
         );
-        Ok(winners)
+        Ok(result)
     }
 
     pub fn set_committee_approval_rating(
