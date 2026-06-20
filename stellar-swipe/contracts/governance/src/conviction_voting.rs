@@ -6,6 +6,56 @@ use crate::{checked_mul, GovernanceError, StorageKey};
 
 const PRECISION: i128 = 10_000;
 
+/// ── Conviction Calibration ────────────────────────────────────────────────
+/// Calibration controls let the governance admin tune how conviction is
+/// penalised for short-lived support and rewarded for sustained commitment.
+///
+/// Fields
+/// ──────
+/// * `penalty_threshold_days`  – Votes younger than this threshold (in days)
+///   receive a weight penalty. Set to 0 to disable the penalty.
+/// * `penalty_multiplier`      – Denominator (1/N) for the penalty fraction.
+///   e.g. 2 → penalise by ½, 4 → penalise by ¼. Must be ≥ 1.
+/// * `reward_bonus_pct`        – Percentage (0-100) added to conviction for
+///   votes older than `penalty_threshold_days`. 0 disables the bonus.
+/// * `max_conviction_cap`      – Absolute cap on any single vote's conviction
+///   weight. 0 means no cap (unlimited).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConvictionCalibration {
+    pub penalty_threshold_days: u64,
+    pub penalty_multiplier: u64,
+    pub reward_bonus_pct: u64,
+    pub max_conviction_cap: i128,
+}
+
+impl Default for ConvictionCalibration {
+    fn default() -> Self {
+        Self {
+            // No penalty by default (maintains backward compatibility)
+            penalty_threshold_days: 0,
+            penalty_multiplier: 1,
+            reward_bonus_pct: 0,
+            max_conviction_cap: 0,
+        }
+    }
+}
+
+/// ── Calibration helpers ───────────────────────────────────────────────────
+
+pub fn get_conviction_calibration(env: &Env) -> ConvictionCalibration {
+    env.storage()
+        .instance()
+        .get(&StorageKey::ConvictionCalibration)
+        .unwrap_or_else(|| ConvictionCalibration::default())
+}
+
+pub fn put_conviction_calibration(env: &Env, config: &ConvictionCalibration) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::ConvictionCalibration, config);
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConvictionStatus {
@@ -499,6 +549,7 @@ pub fn get_conviction_growth_curve(
         .get(proposal_id)
         .ok_or(GovernanceError::ProposalNotFound)?;
 
+    let calibration = get_conviction_calibration(env);
     let mut curve: Vec<(u64, i128)> = Vec::new(env);
     let mut day = 0;
     while day <= days {
@@ -510,7 +561,7 @@ pub fn get_conviction_growth_curve(
             let voter = proposal.voters.get(idx).unwrap();
             if let Some(vote) = proposal.votes.get(voter) {
                 let elapsed = ts.saturating_sub(vote.vote_started);
-                let conviction = calculate_conviction(vote.tokens_committed, elapsed);
+                let conviction = calculate_conviction(vote.tokens_committed, elapsed, &calibration);
                 projected = projected.saturating_add(conviction);
             }
             idx += 1;
@@ -523,14 +574,43 @@ pub fn get_conviction_growth_curve(
     Ok(curve)
 }
 
-fn calculate_conviction(tokens: i128, time_elapsed: u64) -> i128 {
+fn calculate_conviction(
+    tokens: i128,
+    time_elapsed: u64,
+    calibration: &ConvictionCalibration,
+) -> i128 {
     let days_elapsed = time_elapsed / 86_400;
     if days_elapsed == 0 {
         return 0;
     }
 
     let sqrt_days = integer_sqrt(days_elapsed as i128);
-    tokens.saturating_mul(sqrt_days) / 1000
+    let mut conviction = tokens.saturating_mul(sqrt_days) / 1000;
+
+    // ── Apply penalty for short-lived (low-conviction) votes ──────────────
+    if calibration.penalty_threshold_days > 0
+        && (days_elapsed as u64) < calibration.penalty_threshold_days
+        && calibration.penalty_multiplier > 1
+    {
+        let penalty = conviction / (calibration.penalty_multiplier as i128);
+        conviction = conviction.saturating_sub(penalty);
+    }
+
+    // ── Apply reward bonus for sustained commitment ───────────────────────
+    if calibration.reward_bonus_pct > 0
+        && (days_elapsed as u64) >= calibration.penalty_threshold_days
+    {
+        let bonus =
+            checked_mul(conviction, calibration.reward_bonus_pct as i128).unwrap_or(0) / 100;
+        conviction = conviction.saturating_add(bonus);
+    }
+
+    // ── Apply absolute cap ────────────────────────────────────────────────
+    if calibration.max_conviction_cap > 0 && conviction > calibration.max_conviction_cap {
+        conviction = calibration.max_conviction_cap;
+    }
+
+    conviction
 }
 
 fn calculate_conviction_threshold(
@@ -564,7 +644,8 @@ fn integer_sqrt(n: i128) -> i128 {
 
 fn update_vote_conviction(env: &Env, vote: &mut ConvictionVote) -> Result<(), GovernanceError> {
     let elapsed = env.ledger().timestamp().saturating_sub(vote.vote_started);
-    vote.current_conviction = calculate_conviction(vote.tokens_committed, elapsed);
+    let calibration = get_conviction_calibration(env);
+    vote.current_conviction = calculate_conviction(vote.tokens_committed, elapsed, &calibration);
     vote.last_conviction_update = env.ledger().timestamp();
     Ok(())
 }

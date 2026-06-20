@@ -1249,4 +1249,275 @@ mod event_format_tests {
         assert_eq!(contract, Symbol::new(&env, "governance"));
         assert_eq!(event, Symbol::new(&env, "vesting_released"));
     }
-}
+
+    // ── Conviction Calibration tests ─────────────────────────────────────
+
+    #[test]
+    fn conviction_calibration_default_is_noop() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = client.conviction_calibration();
+        assert_eq!(config.penalty_threshold_days, 0);
+        assert_eq!(config.penalty_multiplier, 1);
+        assert_eq!(config.reward_bonus_pct, 0);
+        assert_eq!(config.max_conviction_cap, 0);
+    }
+
+    #[test]
+    fn conviction_calibration_admin_can_set_config() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 7,
+            penalty_multiplier: 2,
+            reward_bonus_pct: 10,
+            max_conviction_cap: 50_000,
+        };
+        let result = client.set_conviction_calibration(&admin, &config);
+        assert!(result.is_ok());
+
+        let stored = client.conviction_calibration();
+        assert_eq!(stored.penalty_threshold_days, 7);
+        assert_eq!(stored.penalty_multiplier, 2);
+        assert_eq!(stored.reward_bonus_pct, 10);
+        assert_eq!(stored.max_conviction_cap, 50_000);
+    }
+
+    #[test]
+    fn conviction_calibration_non_admin_cannot_set_config() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let fake_admin = Address::generate(&env);
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 3,
+            penalty_multiplier: 4,
+            reward_bonus_pct: 5,
+            max_conviction_cap: 10_000,
+        };
+
+        let result = client.try_set_conviction_calibration(&fake_admin, &config);
+        assert_eq!(result, Err(Ok(GovernanceError::Unauthorized)));
+    }
+
+    #[test]
+    fn conviction_calibration_rejects_invalid_multiplier() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 5,
+            penalty_multiplier: 0,
+            reward_bonus_pct: 0,
+            max_conviction_cap: 0,
+        };
+        let result = client.try_set_conviction_calibration(&admin, &config);
+        assert_eq!(result, Err(Ok(GovernanceError::InvalidCalibrationConfig)));
+    }
+    #[test]
+    fn conviction_calibration_rejects_invalid_reward_bonus() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 5,
+            penalty_multiplier: 2,
+            reward_bonus_pct: 101,
+            max_conviction_cap: 0,
+        };
+        let result = client.try_set_conviction_calibration(&admin, &config);
+        assert_eq!(result, Err(Ok(GovernanceError::InvalidCalibrationConfig)));
+    }
+
+    #[test]
+    fn conviction_calibration_penalty_short_votes() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 10,
+            penalty_multiplier: 2,
+            reward_bonus_pct: 0,
+            max_conviction_cap: 0,
+        };
+        client.set_conviction_calibration(&admin, &config);
+
+        let pool_id = client.create_conviction_pool(&admin, &100_000i128, &1_000i128, &86_400u64);
+        let proposal_id = client.create_conviction_proposal(
+            &pool_id,
+            &recipients.community_rewards,
+            &String::from_str(&env, "Test penalty"),
+            &10_000i128,
+            &recipients.public_sale,
+        );
+
+        client.vote_conviction(
+            &pool_id,
+            &proposal_id,
+            &recipients.community_rewards,
+            &1_000i128,
+        );
+
+        env.ledger().set_timestamp(5 * 86_400);
+        let conviction = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert!(conviction > 0);
+        assert_eq!(conviction, 1);
+    #[test]
+    fn conviction_calibration_reward_long_votes() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 10,
+            penalty_multiplier: 1,
+            reward_bonus_pct: 20,
+            max_conviction_cap: 0,
+        };
+        client.set_conviction_calibration(&admin, &config);
+
+        let pool_id = client.create_conviction_pool(&admin, &100_000i128, &1_000i128, &86_400u64);
+        let proposal_id = client.create_conviction_proposal(
+            &pool_id,
+            &recipients.community_rewards,
+            &String::from_str(&env, "Test reward"),
+            &10_000i128,
+            &recipients.public_sale,
+        );
+
+        client.vote_conviction(
+            &pool_id,
+            &proposal_id,
+            &recipients.community_rewards,
+            &1_000i128,
+        );
+
+        env.ledger().set_timestamp(15 * 86_400);
+        let conviction = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert!(conviction >= 3);
+    }
+
+
+    }
+
+    #[test]
+    fn conviction_calibration_caps_max_conviction() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 0,
+            penalty_multiplier: 1,
+            reward_bonus_pct: 0,
+            max_conviction_cap: 5,
+        };
+        client.set_conviction_calibration(&admin, &config);
+
+        let pool_id = client.create_conviction_pool(&admin, &100_000i128, &1_000i128, &86_400u64);
+        let proposal_id = client.create_conviction_proposal(
+            &pool_id,
+            &recipients.community_rewards,
+            &String::from_str(&env, "Test cap"),
+            &10_000i128,
+            &recipients.public_sale,
+        );
+
+        client.vote_conviction(
+            &pool_id,
+            &proposal_id,
+            &recipients.community_rewards,
+            &1_000i128,
+        );
+
+        env.ledger().set_timestamp(100 * 86_400);
+        let conviction = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert_eq!(conviction, 5);
+    }
+
+
+
+
+    #[test]
+    fn conviction_calibration_combination_penalty_and_reward() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 7,
+            penalty_multiplier: 3,
+            reward_bonus_pct: 10,
+            max_conviction_cap: 0,
+        };
+        client.set_conviction_calibration(&admin, &config);
+
+        let pool_id = client.create_conviction_pool(&admin, &100_000i128, &1_000i128, &86_400u64);
+        let proposal_id = client.create_conviction_proposal(
+            &pool_id,
+            &recipients.community_rewards,
+            &String::from_str(&env, "Test combo"),
+            &10_000i128,
+            &recipients.public_sale,
+        );
+
+        client.vote_conviction(
+            &pool_id,
+            &proposal_id,
+            &recipients.community_rewards,
+            &1_000i128,
+        );
+
+        env.ledger().set_timestamp(3 * 86_400);
+        let conviction_short = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert_eq!(conviction_short, 1);
+
+        env.ledger().set_timestamp(14 * 86_400);
+        let conviction_long = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert!(conviction_long >= 3);
+        assert!(conviction_long > conviction_short);
+    }
+
+    #[test]
+    fn conviction_calibration_zero_threshold_disables_penalty() {
+        let (env, contract_id, admin, recipients) = setup();
+        let client = client(&env, &contract_id);
+        initialize(&client, &env, &admin, &recipients);
+
+        let config = crate::conviction_voting::ConvictionCalibration {
+            penalty_threshold_days: 0,
+            penalty_multiplier: 2,
+            reward_bonus_pct: 0,
+            max_conviction_cap: 0,
+        };
+        client.set_conviction_calibration(&admin, &config);
+
+        let pool_id = client.create_conviction_pool(&admin, &100_000i128, &1_000i128, &86_400u64);
+        let proposal_id = client.create_conviction_proposal(
+            &pool_id,
+            &recipients.community_rewards,
+            &String::from_str(&env, "Test no penalty"),
+            &10_000i128,
+            &recipients.public_sale,
+        );
+
+        client.vote_conviction(
+            &pool_id,
+            &proposal_id,
+            &recipients.community_rewards,
+            &1_000i128,
+        );
+
+        env.ledger().set_timestamp(86_400);
+        let conviction = client.update_proposal_conviction(&pool_id, &proposal_id);
+        assert_eq!(conviction, 1);
+    }
+

@@ -30,9 +30,10 @@ pub use committees::{
 };
 use conviction_voting::{
     analyze_conviction_proposal, change_conviction_vote, create_conviction_pool,
-    create_conviction_proposal, execute_conviction_funding, get_conviction_growth_curve,
-    refill_conviction_pool, update_proposal_conviction, vote_conviction, withdraw_conviction_vote,
-    ConvictionAnalytics, ConvictionStatus, ConvictionVotingPool,
+    create_conviction_proposal, execute_conviction_funding, get_conviction_calibration,
+    get_conviction_growth_curve, put_conviction_calibration, refill_conviction_pool,
+    update_proposal_conviction, vote_conviction, withdraw_conviction_vote, ConvictionAnalytics,
+    ConvictionCalibration, ConvictionStatus, ConvictionVotingPool,
 };
 use distribution::{
     circulating_supply as calculate_circulating_supply, create_vesting_schedule as create_schedule,
@@ -115,6 +116,8 @@ pub enum StorageKey {
     ContractPaused,
     /// Reputation decay and stale-score configuration.
     ReputationConfig,
+    /// Conviction calibration configuration (penalty, reward, cap parameters).
+    ConvictionCalibration,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -735,6 +738,29 @@ impl GovernanceContract {
     ) -> Result<Vec<(u64, i128)>, GovernanceError> {
         require_initialized(&env)?;
         conviction_voting::get_conviction_growth_curve(&env, pool_id, proposal_id, days)
+    }
+
+    /// # Summary
+    /// Get the current conviction calibration configuration.
+    pub fn conviction_calibration(env: Env) -> ConvictionCalibration {
+        require_initialized(&env).unwrap_or(());
+        conviction_voting::get_conviction_calibration(&env)
+    }
+
+    /// # Summary
+    /// Admin-only: set the conviction calibration parameters (penalty threshold,
+    /// penalty multiplier, reward bonus percentage, and max conviction cap).
+    pub fn set_conviction_calibration(
+        env: Env,
+        admin: Address,
+        config: ConvictionCalibration,
+    ) -> Result<ConvictionCalibration, GovernanceError> {
+        require_admin(&env, &admin)?;
+        if config.penalty_multiplier == 0 || config.reward_bonus_pct > 100 {
+            return Err(GovernanceError::InvalidCalibrationConfig);
+        }
+        conviction_voting::put_conviction_calibration(&env, &config);
+        Ok(config)
     }
 
     pub fn distribution(env: Env) -> Result<DistributionState, GovernanceError> {

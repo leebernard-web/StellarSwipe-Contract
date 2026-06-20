@@ -54,4 +54,5 @@ pub enum GovernanceError {
     ActionNotFound = 48,
     InvalidTimelockConfig = 49,
     ConvictionPoolNotFound = 50,
+    InvalidCalibrationConfig = 51,
 }
