@@ -1030,6 +1030,7 @@ fn execute_decision_action(
         CommitteeAction::TreasurySpend(action) => {
             let mut treasury_state = get_treasury(env);
             treasury::execute_spend(
+                env,
                 &mut treasury_state,
                 action.recipient.clone(),
                 action.amount,
@@ -1045,6 +1046,7 @@ fn execute_decision_action(
         CommitteeAction::GrantApproval(action) => {
             let mut treasury_state = get_treasury(env);
             treasury::execute_spend(
+                env,
                 &mut treasury_state,
                 action.recipient.clone(),
                 action.amount,

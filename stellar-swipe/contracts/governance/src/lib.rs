@@ -70,8 +70,8 @@ use timelock::{
 pub use reputation::{ReputationConfig, ReputationTier, StalenessLevel};
 pub use token::{HolderAnalytics, HolderBalance, TokenMetadata};
 pub use treasury::{
-    Budget, BudgetReport, RebalanceAction, RecurringPayment, Treasury, TreasuryReport,
-    TreasurySpend,
+    Budget, BudgetApproval, BudgetReport, RebalanceAction, RecurringPayment, Treasury,
+    TreasuryReport, TreasurySpend,
 };
 use quadratic_voting::{
     allocate_vote_credits, cast_quadratic_vote, compare_voting_systems, reallocate_quadratic_votes,
@@ -922,6 +922,48 @@ impl GovernanceContract {
         Ok(budget)
     }
 
+    /// Attach a governance-approved spending cap to an existing budget category.
+    ///
+    /// This **must** be called before any `execute_treasury_spend` for that
+    /// category.  Re-approving a category (e.g. each fiscal period) replaces
+    /// the previous cap and resets the drawn-down counter.
+    ///
+    /// # Parameters
+    /// - `admin`: Admin address (must authorize).
+    /// - `category`: Budget category that already exists via `create_budget`.
+    /// - `proposal_id`: The governance proposal ID that authorised this cap.
+    /// - `approved_cap`: Maximum cumulative spend allowed under this approval.
+    ///
+    /// # Returns
+    /// The recorded [`BudgetApproval`] on success.
+    ///
+    /// # Errors
+    /// - [`GovernanceError::Unauthorized`] — caller is not the admin.
+    /// - [`GovernanceError::BudgetNotFound`] — `category` has no budget.
+    /// - [`GovernanceError::InvalidAmount`] — `approved_cap` ≤ 0.
+    /// - [`GovernanceError::BudgetExceeded`] — cap exceeds budget's `allocated`.
+    pub fn approve_treasury_budget(
+        env: Env,
+        admin: Address,
+        category: String,
+        proposal_id: u64,
+        approved_cap: i128,
+    ) -> Result<BudgetApproval, GovernanceError> {
+        require_admin(&env, &admin)?;
+        let mut treasury = get_treasury(&env);
+        let approval = treasury::approve_budget(
+            &env,
+            &mut treasury,
+            category,
+            proposal_id,
+            approved_cap,
+            env.ledger().timestamp(),
+        )?;
+        put_treasury(&env, &treasury);
+        emit_admin_action(&env, symbol_short!("budgapprv"), &admin, approved_cap);
+        Ok(approval)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn execute_treasury_spend(
         env: Env,
@@ -936,6 +978,7 @@ impl GovernanceContract {
         require_admin(&env, &admin)?;
         let mut treasury = get_treasury(&env);
         let spend = treasury::execute_spend(
+            &env,
             &mut treasury,
             recipient,
             amount,
@@ -986,7 +1029,7 @@ impl GovernanceContract {
         require_admin(&env, &admin)?;
         let mut treasury = get_treasury(&env);
         let processed =
-            treasury::process_recurring_payments(&mut treasury, env.ledger().timestamp())?;
+            treasury::process_recurring_payments(&env, &mut treasury, env.ledger().timestamp())?;
         put_treasury(&env, &treasury);
         emit_admin_action(&env, symbol_short!("payrun"), &admin, processed as i128);
         Ok(processed)

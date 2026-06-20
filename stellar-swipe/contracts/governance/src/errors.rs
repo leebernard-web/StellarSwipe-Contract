@@ -63,4 +63,10 @@ pub enum GovernanceError {
     /// returned so callers can diagnose the problem; internally the ballot is
     /// rejected without mutating election state.
     InvalidElectionVote = 52,
+    /// A treasury spend was attempted for a budget category that has not yet
+    /// received a governance-approved budget cap via `approve_treasury_budget`.
+    BudgetApprovalRequired = 53,
+    /// The requested spend would cause the category's total governance-approved
+    /// cap to be exceeded.
+    ApprovedCapExceeded = 54,
 }
