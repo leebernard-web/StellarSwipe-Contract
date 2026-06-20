@@ -938,8 +938,233 @@ fn upgrade_announcement_event_emitted_on_contract_upgrade_proposal_success() {
     assert_eq!(notes, migration_notes_hash);
 }
 
-// ── Event format tests ────────────────────────────────────────────────────────
+// ── Reputation decay & stale-score tests ─────────────────────────────────
 
+#[test]
+fn reputation_tier_computed_correctly_from_participation() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+
+    let user = Address::generate(&env);
+    // New user starts at Bronze
+    let rep = client.governance_reputation(&user);
+    assert_eq!(rep.tier, ReputationTier::Bronze);
+
+    // Stake first so user has voting power
+    client.stake(&user, &100_000i128);
+    for i in 0..60u64 {
+        env.ledger().set_timestamp(100 + i * 1000);
+        let _pid = client.create_proposal(
+            &user,
+            &ProposalType::ParameterChange(
+                String::from_str(&env, "test_param"), 1000, 1100,
+            ),
+            &String::from_str(&env, &format!("Proposal {}", i)),
+            &String::from_str(&env, "desc"),
+            &Bytes::new(&env),
+        );
+    }
+    // After 60 proposals, tier should be Silver (>=50 actions)
+    let rep = client.governance_reputation(&user);
+    assert_eq!(rep.tier, ReputationTier::Silver);
+}
+
+#[test]
+fn decay_applied_after_grace_period() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    client.stake(&user, &100_000i128);
+
+    // Create one proposal to get some reputation
+    env.ledger().set_timestamp(100);
+    let pid = client.create_proposal(
+        &user,
+        &ProposalType::ParameterChange(
+            String::from_str(&env, "test_param"), 1000, 1100,
+        ),
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, "desc"),
+        &Bytes::new(&env),
+    );
+
+    let rep_before = client.governance_reputation(&user);
+    assert!(rep_before.reputation_score > 0);
+
+    // Advance past the Bronze grace period (30 days)
+    env.ledger().set_timestamp(100 + 40 * 86_400); // 40 days later
+
+    let rep_after = client.governance_reputation(&user);
+    assert!(
+        rep_after.reputation_score < rep_before.reputation_score,
+        "Reputation should decay after grace period: before={}, after={}",
+        rep_before.reputation_score, rep_after.reputation_score,
+    );
+}
+
+    ));
+}
+
+#[test]
+fn no_decay_within_grace_period() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    client.stake(&user, &100_000i128);
+
+    env.ledger().set_timestamp(100);
+    let _pid = client.create_proposal(
+        &user,
+        &ProposalType::ParameterChange(
+            String::from_str(&env, "test_param"), 1000, 1100,
+        ),
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, "desc"),
+        &Bytes::new(&env),
+    );
+
+    let rep_before = client.governance_reputation(&user);
+
+    // Advance 15 days (within Bronze 30-day grace period)
+    env.ledger().set_timestamp(100 + 15 * 86_400);
+    let rep_after = client.governance_reputation(&user);
+
+    assert_eq!(
+        rep_after.reputation_score, rep_before.reputation_score,
+        "Reputation should NOT decay within grace period"
+    );
+}
+
+#[test]
+fn staleness_level_detected_correctly() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    client.stake(&user, &100_000i128);
+
+    // Set initial activity timestamp
+    env.ledger().set_timestamp(1000);
+    let _ = client.create_proposal(
+        &user,
+        &ProposalType::ParameterChange(
+            String::from_str(&env, "test_param"), 1000, 1100,
+        ),
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, "desc"),
+        &Bytes::new(&env),
+    );
+
+    // Still Active within 30 days
+    let staleness = client.check_reputation_staleness(&user);
+    assert_eq!(staleness, StalenessLevel::Active);
+
+    // Aging: 31-90 days
+    env.ledger().set_timestamp(1000 + 60 * 86_400);
+    let staleness = client.check_reputation_staleness(&user);
+    assert_eq!(staleness, StalenessLevel::Aging);
+
+    // Stale: 91-180 days
+    env.ledger().set_timestamp(1000 + 120 * 86_400);
+    let staleness = client.check_reputation_staleness(&user);
+    assert_eq!(staleness, StalenessLevel::Stale);
+
+    // Critical: >180 days
+    env.ledger().set_timestamp(1000 + 250 * 86_400);
+    let staleness = client.check_reputation_staleness(&user);
+    assert_eq!(staleness, StalenessLevel::Critical);
+}
+
+#[test]
+fn refresh_stale_reputation_recalculates_score() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    client.stake(&user, &100_000i128);
+
+    env.ledger().set_timestamp(100);
+    let _pid = client.create_proposal(
+        &user,
+        &ProposalType::ParameterChange(
+            String::from_str(&env, "test_param"), 1000, 1100,
+        ),
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, "desc"),
+        &Bytes::new(&env),
+    );
+
+    // Go 100 days into the future - reputation should be decayed
+    env.ledger().set_timestamp(100 + 100 * 86_400);
+
+    // Call refresh
+    let fresh_score = client.refresh_reputation(&user);
+    let rep = client.governance_reputation(&user);
+    assert_eq!(fresh_score, rep.reputation_score);
+    assert_eq!(rep.staleness_override, None);
+}
+
+#[test]
+fn reputation_config_can_be_updated_by_admin() {
+    let (env, contract_id, admin, _recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &_recipients);
+    env.mock_all_auths();
+
+    // Default config
+    let config = client.reputation_config();
+    assert!(config.decay_enabled);
+    assert!(config.stale_penalty_enabled);
+
+    // Admin disables decay
+    let updated = ReputationConfig {
+        decay_enabled: false,
+        stale_penalty_enabled: true,
+        default_tier: ReputationTier::Bronze,
+    };
+    let result = client.update_reputation_config(&admin, &updated);
+    assert_eq!(result.decay_enabled, false);
+
+    // Verify it's stored
+    let config = client.reputation_config();
+    assert!(!config.decay_enabled);
+    assert!(config.stale_penalty_enabled);
+}
+
+#[test]
+fn detect_staleness_logic() {
+    use crate::reputation::detect_staleness;
+    let env = Env::default();
+    let now = 1_000_000u64;
+
+    env.ledger().set_timestamp(now);
+
+    // Active: last activity was 10 days ago
+    assert_eq!(detect_staleness(&env, now - 10 * 86_400), StalenessLevel::Active);
+
+    // Aging: last activity was 60 days ago
+    assert_eq!(detect_staleness(&env, now - 60 * 86_400), StalenessLevel::Aging);
+
+    // Stale: last activity was 120 days ago
+    assert_eq!(detect_staleness(&env, now - 120 * 86_400), StalenessLevel::Stale);
+
+    // Critical: last activity was 200 days ago
+    assert_eq!(detect_staleness(&env, now - 200 * 86_400), StalenessLevel::Critical);
+}
+
+#[cfg(test)]
+mod event_format_tests {
 #[cfg(test)]
 mod event_format_tests {
     use super::*;

@@ -49,9 +49,11 @@ use proposals::{
     ProposalType, Vote, VoteDelegation, VoteType as GovernanceVoteType,
 };
 use reputation::{
-    calculate_reputation_score, cast_reputation_weighted_vote, distribute_reputation_rewards,
-    get_governance_reputation, get_reputation_leaderboard, record_proposal_creation,
-    record_proposal_outcome, record_vote, Badge, GovernanceReputation,
+    calculate_reputation_score, cast_reputation_weighted_vote, detect_staleness,
+    distribute_reputation_rewards, get_governance_reputation, get_reputation_config,
+    get_reputation_leaderboard, put_reputation_config, record_proposal_creation,
+    record_proposal_outcome, record_vote, refresh_stale_reputation, Badge, GovernanceReputation,
+    ReputationConfig, ReputationTier, StalenessLevel,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Symbol,
@@ -63,6 +65,7 @@ use timelock::{
     extend_execution_window, generate_timelock_analytics, initialize_timelock, queue_action,
     update_timelock_delay, ActionType, Timelock, TimelockAnalytics,
 };
+pub use reputation::{ReputationConfig, ReputationTier, StalenessLevel};
 pub use token::{HolderAnalytics, HolderBalance, TokenMetadata};
 pub use treasury::{
     Budget, BudgetReport, RebalanceAction, RecurringPayment, Treasury, TreasuryReport,
@@ -110,6 +113,8 @@ pub enum StorageKey {
     ConvictionState,
     /// Global pause flag surfaced by `health_check` (admin-controlled).
     ContractPaused,
+    /// Reputation decay and stale-score configuration.
+    ReputationConfig,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -581,6 +586,40 @@ impl GovernanceContract {
     ) -> Result<Vec<(Address, i128)>, GovernanceError> {
         require_admin(&env, &admin)?;
         reputation::distribute_reputation_rewards(&env, reward_pool)
+    }
+
+    /// # Summary
+    /// Get the current reputation configuration (decay schedule, stale penalty settings).
+    pub fn reputation_config(env: Env) -> ReputationConfig {
+        get_reputation_config(&env)
+    }
+
+    /// # Summary
+    /// Admin-only: update the reputation configuration.
+    pub fn update_reputation_config(
+        env: Env,
+        admin: Address,
+        config: ReputationConfig,
+    ) -> Result<ReputationConfig, GovernanceError> {
+        require_admin(&env, &admin)?;
+        put_reputation_config(&env, &config);
+        Ok(config)
+    }
+
+    /// # Summary
+    /// Check the current staleness level for a user.
+    pub fn check_reputation_staleness(env: Env, user: Address) -> StalenessLevel {
+        let rep = get_governance_reputation(&env, user);
+        rep.staleness_override
+            .unwrap_or_else(|| detect_staleness(&env, rep.last_activity))
+    }
+
+    /// # Summary
+    /// Force-refresh a user's reputation score with current decay and staleness adjustments.
+    /// Can be called by anyone to update a stale score on-chain.
+    pub fn refresh_reputation(env: Env, user: Address) -> Result<u32, GovernanceError> {
+        require_initialized(&env)?;
+        refresh_stale_reputation(&env, user)
     }
 
     pub fn create_conviction_pool(
