@@ -825,6 +825,128 @@ fn timelock_queue_execute_and_cancel_flow() {
     assert_eq!(analytics.total_cancelled, 1);
 }
 
+fn queue_underfunded_treasury_spend_action(
+    env: &Env,
+    client: &GovernanceContractClient<'_>,
+    admin: &Address,
+    recipients: &DistributionRecipients,
+) -> (u64, Asset) {
+    let cfg = GovernanceConfig {
+        min_proposal_threshold: 1_000,
+        voting_period: 7 * 86_400,
+        voting_delay: 60,
+        quorum_threshold: 1_000,
+        approval_threshold: 5_000,
+        execution_delay: 60,
+    };
+    client.configure_governance(admin, &cfg);
+    client.initialize_timelock(admin, &3_600u64, &(7 * 86_400u64), admin);
+
+    client.stake(&recipients.community_rewards, &120_000_000i128);
+    client.stake(&recipients.public_sale, &40_000_000i128);
+
+    // Fund the treasury so the proposal passes creation-time validation, then
+    // drain it again after queueing. This models the real-world "contract
+    // state issue" the emergency path exists for: the treasury had funds when
+    // the proposal was approved, but no longer does by the time the timelock
+    // delay elapses and the action becomes executable.
+    let spend_asset = asset(env, "USDC");
+    client.set_treasury_asset(admin, &spend_asset, &10_000i128);
+
+    let proposal_id = client.create_proposal(
+        &recipients.community_rewards,
+        &ProposalType::TreasurySpend(
+            recipients.public_sale.clone(),
+            500i128,
+            spend_asset.clone(),
+            String::from_str(env, "payout"),
+        ),
+        &String::from_str(env, "Fund payout"),
+        &String::from_str(env, "treasury spend"),
+        &Bytes::new(env),
+    );
+
+    env.ledger().set_timestamp(70);
+    client.cast_vote(
+        &proposal_id,
+        &recipients.community_rewards,
+        &GovernanceVoteType::For,
+    );
+    client.cast_vote(&proposal_id, &recipients.public_sale, &GovernanceVoteType::For);
+
+    env.ledger().set_timestamp(8 * 86_400);
+    assert_eq!(client.finalize_proposal(&proposal_id), ProposalStatus::Succeeded);
+
+    let action_id = client.queue_action(&proposal_id);
+    client.set_treasury_asset(admin, &spend_asset, &0i128);
+    (action_id, spend_asset)
+}
+
+#[test]
+fn emergency_unblock_rejects_ineligible_and_unauthorized_callers() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let (action_id, _asset) =
+        queue_underfunded_treasury_spend_action(&env, &client, &admin, &recipients);
+
+    // Not yet overdue: emergency recovery has not opened up yet.
+    let too_early = client.try_emergency_unblock_action(&action_id, &admin);
+    assert_eq!(too_early, Err(Ok(GovernanceError::InvalidDuration)));
+
+    // Past the normal execution window but still inside the grace period.
+    env.ledger().set_timestamp(10 * 86_400);
+    let still_in_grace = client.try_emergency_unblock_action(&action_id, &admin);
+    assert_eq!(still_in_grace, Err(Ok(GovernanceError::InvalidDuration)));
+
+    // Guardian-only: any other caller is rejected even once the window passes.
+    env.ledger().set_timestamp(11 * 86_400);
+    let not_guardian = client.try_emergency_unblock_action(&action_id, &recipients.public_sale);
+    assert_eq!(not_guardian, Err(Ok(GovernanceError::Unauthorized)));
+}
+
+#[test]
+fn emergency_unblock_retries_a_stuck_action_and_rejects_duplicate_execution() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let (action_id, spend_asset) =
+        queue_underfunded_treasury_spend_action(&env, &client, &admin, &recipients);
+
+    // Treasury has no funds yet, so the normal execution attempt fails and the
+    // action sits in the queue unexecuted rather than disappearing.
+    env.ledger().set_timestamp(10 * 86_400);
+    let failed = client.try_execute_queued_action(&action_id, &admin);
+    assert_eq!(failed, Err(Ok(GovernanceError::InsufficientBalance)));
+    assert!(!client.queued_action(&action_id).executed);
+
+    // Past the execution window plus the grace period, the action is eligible
+    // for emergency recovery, but retrying while still underfunded fails the
+    // same way the normal path did.
+    env.ledger().set_timestamp(11 * 86_400);
+    let retry_still_stuck = client.try_emergency_unblock_action(&action_id, &admin);
+    assert_eq!(retry_still_stuck, Err(Ok(GovernanceError::InsufficientBalance)));
+    assert!(!client.queued_action(&action_id).executed);
+
+    // Once the underlying contract state issue is resolved, the guardian's
+    // emergency retry succeeds exactly once.
+    client.set_treasury_asset(&admin, &spend_asset, &500i128);
+    client.emergency_unblock_action(&action_id, &admin);
+
+    let recovered_action = client.queued_action(&action_id);
+    assert!(recovered_action.executed);
+
+    let proposal = client.proposal(&recovered_action.proposal_id);
+    assert_eq!(proposal.status, ProposalStatus::Executed);
+
+    // Duplicate-execution protection: a second emergency call on an already
+    // executed action is rejected rather than spending the treasury twice.
+    let duplicate = client.try_emergency_unblock_action(&action_id, &admin);
+    assert_eq!(duplicate, Err(Ok(GovernanceError::InvalidCommitteeAction)));
+}
+
 #[test]
 fn governance_reputation_tracks_activity() {
     let (env, contract_id, admin, recipients) = setup();

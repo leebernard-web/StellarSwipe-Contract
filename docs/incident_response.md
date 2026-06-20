@@ -168,7 +168,55 @@ the treasury, or upgrading contracts with backdoored code.
 
 ---
 
-## Scenario 4: Key Compromise
+## Scenario 4: Stuck Governance Timelock Action
+
+### Description
+A queued timelock action (e.g. a `TreasurySpend` proposal) passes its execution
+window but `execute_queued_action` keeps failing — typically because the
+underlying contract state changed between when the proposal was approved and
+when the timelock delay elapsed (treasury drained by another spend, a
+parameter changed underneath it, ledger timing pushed the window). The action
+is neither executed nor cancelled; it just sits in the queue.
+
+### Detection
+- `execute_queued_action` repeatedly returns an error (e.g. `InsufficientBalance`)
+  for the same `action_id` well past its `execution_available` timestamp.
+- `timelock_analytics()` shows `total_queued` growing without a matching rise
+  in `total_executed`.
+- `queued_action(action_id)` shows `executed: false` long after the window opened.
+
+### Immediate Response
+1. Call `queued_action(action_id)` to confirm the action is unexecuted and
+   identify `execution_available` and the underlying `proposal_id`.
+2. Call `proposal(proposal_id)` to see what the action is trying to do and
+   why it might be failing (e.g. check `treasury()` balance for a
+   `TreasurySpend`).
+3. Resolve the root cause if possible (e.g. `set_treasury_asset` to restore
+   the funds the proposal expects) — do **not** reach for emergency recovery
+   before understanding why normal execution is failing.
+
+### Resolution
+1. Once the underlying issue is fixed, the guardian can call
+   `emergency_unblock_action(action_id, guardian)`. This is only callable by
+   the configured timelock guardian, and only once the action has been stuck
+   for more than 24 hours past `execution_available` (enforced on-chain) — it
+   cannot be used to skip the normal timelock delay.
+2. A successful call retries the proposal's execution and marks the action
+   executed exactly once; calling it again on an already-executed or
+   cancelled action is rejected (`InvalidCommitteeAction`), so retries cannot
+   double-spend the treasury or re-apply a parameter change.
+3. If the retry keeps failing, the root cause has not actually been resolved —
+   investigate further before retrying again.
+
+### Post-Mortem
+- Document why the action got stuck (state drift, ledger timing, etc.).
+- Consider whether the proposal type needs a stronger invariant check at
+  execution time so the same class of failure can't recur.
+- Confirm `timelock_analytics()` reflects the action as executed.
+
+---
+
+## Scenario 5: Key Compromise
 
 ### Description
 An admin private key, multisig signer key, or deployer key is compromised, giving an

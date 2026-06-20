@@ -62,9 +62,10 @@ use soroban_sdk::{
 };
 use stellar_swipe_common::Asset;
 use timelock::{
-    cancel_queued_action, emergency_execute, execute_multiple_actions, execute_queued_action,
-    extend_execution_window, generate_timelock_analytics, initialize_timelock, queue_action,
-    update_timelock_delay, ActionType, Timelock, TimelockAnalytics,
+    cancel_queued_action, emergency_execute, emergency_unblock_action, execute_multiple_actions,
+    execute_queued_action, extend_execution_window, generate_timelock_analytics, get_queued_action,
+    initialize_timelock, queue_action, update_timelock_delay, ActionType, QueuedAction, Timelock,
+    TimelockAnalytics,
 };
 pub use reputation::{ReputationConfig, ReputationTier, StalenessLevel};
 pub use token::{HolderAnalytics, HolderBalance, TokenMetadata};
@@ -525,6 +526,22 @@ impl GovernanceContract {
     ) -> Result<(), GovernanceError> {
         require_initialized(&env)?;
         timelock::emergency_execute(&env, action_id, guardian)
+    }
+
+    /// Guardian-only recovery path that retries a queued action which is stuck
+    /// past its execution window due to ledger timing or contract state issues.
+    pub fn emergency_unblock_action(
+        env: Env,
+        action_id: u64,
+        guardian: Address,
+    ) -> Result<(), GovernanceError> {
+        require_initialized(&env)?;
+        timelock::emergency_unblock_action(&env, action_id, guardian)
+    }
+
+    pub fn queued_action(env: Env, action_id: u64) -> Result<QueuedAction, GovernanceError> {
+        require_initialized(&env)?;
+        get_queued_action(&env, action_id)
     }
 
     pub fn timelock_analytics(env: Env) -> Result<TimelockAnalytics, GovernanceError> {

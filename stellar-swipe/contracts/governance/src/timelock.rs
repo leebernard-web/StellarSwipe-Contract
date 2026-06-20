@@ -26,6 +26,13 @@ pub struct QueuedAction {
     pub cancelled: bool,
 }
 
+/// Once an action has been executable for this many seconds without succeeding,
+/// it is considered stuck and becomes eligible for emergency recovery. A failed
+/// contract invocation rolls back all of its storage writes, so a queued action
+/// cannot persist a "blocked" flag from inside the same call that failed to
+/// execute it; eligibility is therefore derived purely from elapsed time.
+const STUCK_GRACE_PERIOD: u64 = 86_400;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Timelock {
@@ -95,6 +102,19 @@ pub fn put_timelock(env: &Env, timelock: &Timelock) {
         .set(&StorageKey::TimelockState, timelock);
 }
 
+pub fn get_queued_action(env: &Env, action_id: u64) -> Result<QueuedAction, GovernanceError> {
+    let timelock = get_timelock(env)?;
+    let mut i = 0;
+    while i < timelock.queued_actions.len() {
+        let action = timelock.queued_actions.get(i).unwrap();
+        if action.id == action_id {
+            return Ok(action);
+        }
+        i += 1;
+    }
+    Err(GovernanceError::ActionNotFound)
+}
+
 pub fn queue_action(env: &Env, proposal_id: u64) -> Result<u64, GovernanceError> {
     let proposal = proposals::get_proposal(env, proposal_id)?;
     if proposal.status != ProposalStatus::Succeeded {
@@ -151,6 +171,60 @@ pub fn execute_queued_action(
                 return Err(GovernanceError::InvalidCommitteeAction);
             }
             if env.ledger().timestamp() < action.execution_available {
+                return Err(GovernanceError::InvalidDuration);
+            }
+
+            proposals::execute_proposal_action_by_id(env, action.proposal_id)?;
+            action.executed = true;
+            timelock.queued_actions.set(i, action.clone());
+            put_timelock(env, &timelock);
+            proposals::mark_proposal_executed(env, action.proposal_id)?;
+            return Ok(());
+        }
+        i += 1;
+    }
+
+    Err(GovernanceError::ActionNotFound)
+}
+
+/// Emergency recovery path for queued actions that are stuck past their execution
+/// window because of ledger timing or downstream contract state issues (e.g. a
+/// treasury spend that was funded when approved but drained again before the
+/// timelock delay elapsed).
+///
+/// Eligibility: the action must not already be executed or cancelled, and must
+/// be overdue by more than [`STUCK_GRACE_PERIOD`] past `execution_available`.
+/// The grace period keeps this path from being usable to skip the normal
+/// timelock delay — it only kicks in once an action has visibly failed to
+/// execute through the normal path for a sustained period.
+///
+/// Only the configured guardian may call this. Each call retries the
+/// underlying proposal execution: success marks the action executed exactly
+/// once (guarded by the same `executed`/`cancelled` check as the normal path,
+/// so a second call on an already-recovered action is rejected); failure
+/// returns the underlying error and leaves the action queued for another
+/// attempt once whatever was blocking it is resolved.
+pub fn emergency_unblock_action(
+    env: &Env,
+    action_id: u64,
+    guardian: Address,
+) -> Result<(), GovernanceError> {
+    guardian.require_auth();
+    let mut timelock = get_timelock(env)?;
+    if guardian != timelock.guardian {
+        return Err(GovernanceError::Unauthorized);
+    }
+
+    let mut i = 0;
+    while i < timelock.queued_actions.len() {
+        let mut action = timelock.queued_actions.get(i).unwrap();
+        if action.id == action_id {
+            if action.executed || action.cancelled {
+                return Err(GovernanceError::InvalidCommitteeAction);
+            }
+
+            let stuck_since = action.execution_available.saturating_add(STUCK_GRACE_PERIOD);
+            if env.ledger().timestamp() < stuck_since {
                 return Err(GovernanceError::InvalidDuration);
             }
 
