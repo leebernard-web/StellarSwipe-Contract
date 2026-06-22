@@ -2330,3 +2330,47 @@ fn non_admin_cannot_approve_budget() {
     }
 
  main
+
+#[test]
+fn voting_power_uses_snapshot_not_live_balance() {
+    // Arrange: two voters with pre-existing stake
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    let late_staker = recipients.public_sale.clone();
+    client.stake(&recipients.community_rewards, &120_000_000i128);
+    // late_staker has 0 staked at proposal creation time
+
+    let proposal_id = client.create_proposal(
+        &recipients.community_rewards,
+        &ProposalType::SignalProposal(String::from_str(&env, "Snapshot test")),
+        &String::from_str(&env, "Snapshot"),
+        &String::from_str(&env, "Voting power must be snapshotted at proposal creation"),
+        &Bytes::new(&env),
+    );
+
+    // late_staker stakes AFTER proposal creation — should not gain voting power on this proposal
+    client.stake(&late_staker, &50_000_000i128);
+    assert_eq!(client.staked_balance(&late_staker).unwrap(), 50_000_000);
+
+    // Advance into the voting window
+    env.ledger().set_timestamp(70);
+
+    // community_rewards can vote (was snapshotted with 120_000_000)
+    client.cast_vote(
+        &proposal_id,
+        &recipients.community_rewards,
+        &GovernanceVoteType::For,
+    );
+    let proposal = client.proposal(&proposal_id).unwrap();
+    assert_eq!(proposal.votes_for, 120_000_000);
+
+    // late_staker had 0 power at snapshot time — must be rejected with NoVotingPower
+    let result = client.try_cast_vote(
+        &proposal_id,
+        &late_staker,
+        &GovernanceVoteType::For,
+    );
+    assert_eq!(result, Err(Ok(GovernanceError::NoVotingPower)));
+}

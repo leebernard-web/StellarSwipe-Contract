@@ -115,6 +115,8 @@ pub enum StorageKey {
     ReputationState,
     VoteRecords,
     ConvictionState,
+    /// Voting-power snapshot taken at proposal creation: Map<Address, i128>.
+    VoteSnapshots(u64),
     /// Global pause flag surfaced by `health_check` (admin-controlled).
     ContractPaused,
     /// Reputation decay and stale-score configuration.
@@ -1670,6 +1672,21 @@ pub(crate) fn track_holder(env: &Env, holder: &Address) {
     }
     holders.push_back(holder.clone());
     put_holders(env, &holders);
+}
+
+pub(crate) fn get_vote_snapshot(env: &Env, proposal_id: u64, voter: &Address) -> Option<i128> {
+    let map: Map<Address, i128> = env
+        .storage()
+        .instance()
+        .get(&StorageKey::VoteSnapshots(proposal_id))
+        .unwrap_or(Map::new(env));
+    map.get(voter.clone())
+}
+
+pub(crate) fn put_vote_snapshots(env: &Env, proposal_id: u64, snapshots: &Map<Address, i128>) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::VoteSnapshots(proposal_id), snapshots);
 }
 
 pub(crate) fn checked_add(left: i128, right: i128) -> Result<i128, GovernanceError> {

@@ -2,8 +2,9 @@ use soroban_sdk::{contracttype, symbol_short, Address, Bytes, Env, Map, String, 
 use stellar_swipe_common::Asset;
 
 use crate::{
-    add_balance, checked_add, checked_mul, checked_sub, get_staked_balance, get_total_supply,
-    get_treasury, put_treasury, require_admin, GovernanceError, StorageKey,
+    add_balance, checked_add, checked_mul, checked_sub, get_holders, get_staked_balance,
+    get_total_supply, get_treasury, get_vote_snapshot, put_treasury, put_vote_snapshots,
+    require_admin, GovernanceError, StorageKey,
 };
 
 #[contracttype]
@@ -212,6 +213,21 @@ pub fn create_proposal(
 
     let mut state = get_proposals_state(env);
     let id = state.next_proposal_id;
+
+    // Snapshot every current holder's effective voting power so that staking
+    // or unstaking after this point cannot affect votes on this proposal.
+    let holders = get_holders(env);
+    let mut snapshots: Map<Address, i128> = Map::new(env);
+    let mut hi = 0;
+    while hi < holders.len() {
+        let h = holders.get(hi).unwrap();
+        let p = get_effective_voting_power(env, &h);
+        if p > 0 {
+            snapshots.set(h, p);
+        }
+        hi += 1;
+    }
+    put_vote_snapshots(env, id, &snapshots);
     let now = env.ledger().timestamp();
 
     let proposal = Proposal {
@@ -288,7 +304,8 @@ pub fn cast_vote(
         return Err(GovernanceError::AlreadyVoted);
     }
 
-    let power = get_effective_voting_power(env, &voter);
+    let power = get_vote_snapshot(env, proposal_id, &voter)
+        .unwrap_or(0);
     if power <= 0 {
         return Err(GovernanceError::NoVotingPower);
     }
