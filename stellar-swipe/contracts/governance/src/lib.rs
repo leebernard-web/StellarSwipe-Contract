@@ -17,6 +17,8 @@ mod voting;
 mod test;
 #[cfg(test)]
 mod test_health;
+#[cfg(test)]
+mod test_pause_propagation;
 
 use committees::{
     list_committees as list_registered_committees, CommitteeAction, CommitteeElection,
@@ -373,6 +375,7 @@ impl GovernanceContract {
         execution_payload: Bytes,
     ) -> Result<u64, GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         let proposal_id = proposals::create_proposal(
             &env,
             proposer.clone(),
@@ -422,6 +425,7 @@ impl GovernanceContract {
         vote_type: GovernanceVoteType,
     ) -> Result<(), GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         voting::cast_vote(&env, proposal_id, voter.clone(), vote_type.clone())?;
         let _ = record_vote(&env, voter, proposal_id, vote_type);
         Ok(())
@@ -432,6 +436,7 @@ impl GovernanceContract {
         proposal_id: u64,
     ) -> Result<ProposalStatus, GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         let status = proposals::finalize_proposal(&env, proposal_id)?;
         let _ = record_proposal_outcome(&env, proposal_id);
         Ok(status)
@@ -443,6 +448,7 @@ impl GovernanceContract {
         executor: Address,
     ) -> Result<ProposalStatus, GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         proposals::execute_proposal(&env, proposal_id, executor)
     }
 
@@ -492,6 +498,7 @@ impl GovernanceContract {
 
     pub fn queue_action(env: Env, proposal_id: u64) -> Result<u64, GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         timelock::queue_action(&env, proposal_id)
     }
 
@@ -501,6 +508,7 @@ impl GovernanceContract {
         executor: Address,
     ) -> Result<(), GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         timelock::execute_queued_action(&env, action_id, executor)
     }
 
@@ -569,6 +577,7 @@ impl GovernanceContract {
         executor: Address,
     ) -> Result<Vec<u64>, GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         timelock::execute_multiple_actions(&env, action_ids, executor)
     }
 
@@ -845,6 +854,7 @@ impl GovernanceContract {
 
     pub fn stake(env: Env, user: Address, amount: i128) -> Result<(), GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         user.require_auth();
         token::stake(&env, &user, amount)?;
         emit_stake_changed(&env, &user, amount, true);
@@ -853,6 +863,7 @@ impl GovernanceContract {
 
     pub fn unstake(env: Env, user: Address, amount: i128) -> Result<(), GovernanceError> {
         require_initialized(&env)?;
+        require_not_paused(&env)?;
         user.require_auth();
         token::unstake(&env, &user, amount)?;
         emit_stake_changed(&env, &user, amount, false);
@@ -1435,6 +1446,22 @@ fn is_initialized(env: &Env) -> bool {
         .instance()
         .get(&StorageKey::Initialized)
         .unwrap_or(false)
+}
+
+/// Returns `Err(GovernanceError::ContractPaused)` when the governance contract
+/// is administratively paused.  Call this at the top of every state-mutating
+/// entry-point that should be blocked during a pause.
+pub(crate) fn require_not_paused(env: &Env) -> Result<(), GovernanceError> {
+    let paused: bool = env
+        .storage()
+        .instance()
+        .get(&StorageKey::ContractPaused)
+        .unwrap_or(false);
+    if paused {
+        Err(GovernanceError::ContractPaused)
+    } else {
+        Ok(())
+    }
 }
 
 fn metadata(env: &Env) -> Result<TokenMetadata, GovernanceError> {

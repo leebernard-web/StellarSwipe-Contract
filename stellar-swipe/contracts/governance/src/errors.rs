@@ -54,7 +54,11 @@ pub enum GovernanceError {
     ActionNotFound = 48,
     InvalidTimelockConfig = 49,
     ConvictionPoolNotFound = 50,
+feat/governance-pause-propagation
+ feat/governance-pause-propagation
+
  feat/treasury-budget-caps
+ main
     /// Fewer eligible voters participated in a committee election than the
     /// configured minimum quorum requires.  The election is voided and the
     /// committee keeps its existing members.
@@ -70,7 +74,17 @@ pub enum GovernanceError {
     /// The requested spend would cause the category's total governance-approved
     /// cap to be exceeded.
     ApprovedCapExceeded = 54,
+ feat/governance-pause-propagation
+    /// The governance contract is administratively paused.  All state-mutating
+    /// governance actions (proposal execution, staking, timelock operations)
+    /// are blocked until an admin calls `set_contract_paused(false)`.
+    ContractPaused = 55,
+
+    InvalidCalibrationConfig = 51,
+ main
+
 
     InvalidCalibrationConfig = 51,
 main
+ main
 }

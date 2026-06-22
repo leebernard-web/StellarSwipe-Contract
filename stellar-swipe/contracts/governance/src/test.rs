@@ -1401,7 +1401,11 @@ mod event_format_tests {
         assert_eq!(contract, Symbol::new(&env, "governance"));
         assert_eq!(event, Symbol::new(&env, "vesting_released"));
     }
+ feat/governance-pause-propagation
+feat/governance-pause-propagation
+
  feat/treasury-budget-caps
+main
 }
 
 // ── Committee election: quorum, invalid-vote, and success tests ──────────
@@ -2056,7 +2060,11 @@ fn non_admin_cannot_approve_budget() {
     );
     assert_eq!(result, Err(Ok(GovernanceError::Unauthorized)));
 }
-=======
+ feat/governance-pause-propagation
+
+
+
+ main
 
     // ── Conviction Calibration tests ─────────────────────────────────────
 
@@ -2330,6 +2338,8 @@ fn non_admin_cannot_approve_budget() {
     }
 
  main
+ feat/governance-pause-propagation
+
 
 #[test]
 fn voting_power_uses_snapshot_not_live_balance() {
@@ -2374,3 +2384,4 @@ fn voting_power_uses_snapshot_not_live_balance() {
     );
     assert_eq!(result, Err(Ok(GovernanceError::NoVotingPower)));
 }
+ main
