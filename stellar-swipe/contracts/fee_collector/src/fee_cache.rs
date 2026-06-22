@@ -7,7 +7,7 @@ use crate::storage::{
     get_burn_rate, get_fee_optimization_config, get_network_condition_score, get_protocol_token,
     FeeOptimizationConfig, MAX_FEE_RATE_BPS, MIN_FEE_RATE_BPS,
 };
-use crate::types::Asset;
+use stellar_swipe_common::Asset;
 
 const CACHE_KEY: Symbol = symbol_short!("fee_cfg");
 
@@ -30,7 +30,7 @@ pub fn load_tx_fee_config(env: &Env) -> TxFeeConfigCache {
 }
 
 pub fn effective_fee_rate_cached(
-    env: &Env,
+    _env: &Env,
     base_rate: u32,
     token: &Address,
     cache: &TxFeeConfigCache,
