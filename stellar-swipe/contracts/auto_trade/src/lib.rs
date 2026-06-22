@@ -500,13 +500,15 @@ impl AutoTradeContract {
             return Err(AutoTradeError::TradingPaused);
         }
 
-        logging::emit_log(
-            &env,
-            logging::LogLevel::Info,
-            String::from_str(&env, "trade"),
-            String::from_str(&env, "execute_trade_started"),
-            None,
-        );
+        if logging::is_info_logging_enabled(&env) {
+            logging::emit_log(
+                &env,
+                logging::LogLevel::Info,
+                String::from_str(&env, "trade"),
+                String::from_str(&env, "execute_trade_started"),
+                None,
+            );
+        }
 
         // Oracle circuit breaker: halt if oracle is unavailable (unless admin override)
         oracle::check_oracle_circuit_breaker(&env, signal_id as u32)?;
@@ -638,6 +640,8 @@ impl AutoTradeContract {
             .set(&DataKey::Trades(user.clone(), signal_id), &trade);
 
         if execution.executed_amount > 0 {
+            rate_limit::record_transfer(&env, &user, execution.executed_amount);
+
             // ── Referral fee split ────────────────────────────────────────────
             // Platform fee = 7% of executed amount (0.7 XLM per 10 XLM trade).
             // Referral reward = 10% of platform fee → deducted from platform share.

@@ -1,8 +1,49 @@
-use soroban_sdk::{Address, Env, Map, String, BytesN};
+use soroban_sdk::{contracttype, Address, Env, Map, String, BytesN};
 use crate::submission::{Action, Signal};
 use crate::types::{ProviderProfile, Outcome, SignalStatus};
 use crate::errors::AdminError;
 use crate::admin;
+
+/// Persistent cache: active signal count per provider (O(1) limit checks).
+#[contracttype]
+#[derive(Clone)]
+pub enum ProviderCacheKey {
+    ActiveSignalCount(Address),
+}
+
+pub fn get_provider_active_count(env: &Env, provider: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&ProviderCacheKey::ActiveSignalCount(provider.clone()))
+        .unwrap_or(0)
+}
+
+pub fn increment_provider_active_count(env: &Env, provider: &Address) {
+    let count = get_provider_active_count(env, provider).saturating_add(1);
+    env.storage()
+        .persistent()
+        .set(&ProviderCacheKey::ActiveSignalCount(provider.clone()), &count);
+}
+
+pub fn decrement_provider_active_count(env: &Env, provider: &Address) {
+    let count = get_provider_active_count(env, provider);
+    if count > 0 {
+        env.storage()
+            .persistent()
+            .set(&ProviderCacheKey::ActiveSignalCount(provider.clone()), &(count - 1));
+    }
+}
+
+pub fn sync_provider_active_count(
+    env: &Env,
+    storage: &Map<u64, Signal>,
+    provider: &Address,
+) {
+    let count = count_active_provider_signals(storage, provider);
+    env.storage()
+        .persistent()
+        .set(&ProviderCacheKey::ActiveSignalCount(provider.clone()), &count);
+}
 
 /// Maximum allowed price deviation from oracle price (in basis points)
 /// 2000 = 20% deviation allowed
@@ -56,7 +97,15 @@ pub fn validate_provider_signal_limit(
         _ => admin::get_bronze_signal_limit(env),
     };
 
-    if count_active_provider_signals(storage, provider) >= limit {
+    let key = ProviderCacheKey::ActiveSignalCount(provider.clone());
+    let active_count = if env.storage().persistent().has(&key) {
+        get_provider_active_count(env, provider)
+    } else {
+        sync_provider_active_count(env, storage, provider);
+        get_provider_active_count(env, provider)
+    };
+
+    if active_count >= limit {
         return Err(AdminError::SignalLimitExceeded);
     }
     Ok(())

@@ -24,6 +24,11 @@ path = "tests/load/test_high_volume.rs"
 required-features = ["testutils"]
 
 [[test]]
+name = "test_perf_regression"
+path = "tests/load/test_perf_regression.rs"
+required-features = ["testutils"]
+
+[[test]]
 name = "test_contract_upgrade"
 path = "tests/integration/test_contract_upgrade.rs"
 required-features = ["testutils"]

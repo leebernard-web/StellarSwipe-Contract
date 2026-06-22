@@ -44,6 +44,13 @@ pub fn get_log_level(env: &Env) -> LogLevel {
         .unwrap_or(LogLevel::Info)
 }
 
+pub fn is_info_logging_enabled(env: &Env) -> bool {
+    matches!(
+        get_log_level(env),
+        LogLevel::Debug | LogLevel::Info
+    )
+}
+
 pub fn emit_log(
     env: &Env,
     level: LogLevel,

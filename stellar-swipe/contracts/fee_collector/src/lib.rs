@@ -3,6 +3,7 @@
 mod errors;
 pub use errors::ContractError;
 
+mod fee_cache;
 mod events;
 pub use events::{FeeRateUpdated, FeesBurned, FeesClaimed, FirstTradeFeeWaived, TreasuryWithdrawal, WithdrawalQueued};
 use events::{
@@ -57,6 +58,18 @@ pub fn fee_amount_floor(trade_amount: i128, fee_rate_bps: u32) -> Option<i128> {
     trade_amount
         .checked_mul(fee_rate_bps as i128)?
         .checked_div(10_000)
+}
+
+/// Maximum fee collections per `batch_collect_fees` call.
+pub const MAX_BATCH_FEE_SIZE: u32 = 20;
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BatchFeeInput {
+    pub trader: Address,
+    pub token: Address,
+    pub trade_amount: i128,
+    pub trade_asset: Asset,
 }
 
 #[contract]
@@ -558,6 +571,33 @@ impl FeeCollector {
         result
     }
 
+    /// Collect fees for multiple trades in one call. Config is loaded once and reused
+    /// across all items via the transaction-scoped fee cache.
+    pub fn batch_collect_fees(
+        env: Env,
+        items: Vec<BatchFeeInput>,
+    ) -> Result<Vec<i128>, ContractError> {
+        let len = items.len();
+        if len == 0 || len > MAX_BATCH_FEE_SIZE {
+            return Err(ContractError::InvalidAmount);
+        }
+
+        let _cache = fee_cache::load_tx_fee_config(&env);
+        let mut results: Vec<i128> = Vec::new(&env);
+        for i in 0..len {
+            let item = items.get(i).unwrap();
+            let fee = Self::collect_fee_with_recovery(
+                env.clone(),
+                item.trader.clone(),
+                item.token.clone(),
+                item.trade_amount,
+                item.trade_asset.clone(),
+            )?;
+            results.push_back(fee);
+        }
+        Ok(results)
+    }
+
     fn collect_fee_with_recovery(
         env: Env,
         trader: Address,
@@ -581,7 +621,9 @@ impl FeeCollector {
             return Ok(0);
         }
 
-        let fee_rate = Self::effective_fee_rate_for_trade(&env, &trader, &token, &trade_asset)?;
+        let fee_cache = fee_cache::load_tx_fee_config(&env);
+        let base_rate = rebates::get_fee_rate_for_user(&env, &trader);
+        let fee_rate = fee_cache::effective_fee_rate_cached(&env, base_rate, &token, &fee_cache);
         let fee_amount = fee_amount_floor(trade_amount, fee_rate)
             .ok_or(ContractError::ArithmeticOverflow)?;
 
@@ -589,13 +631,14 @@ impl FeeCollector {
             return Err(ContractError::FeeRoundedToZero);
         }
 
-        token::Client::new(&env, &token).transfer(
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
             &trader,
             &env.current_contract_address(),
             &fee_amount,
         );
 
-        let burn_rate = get_burn_rate(&env);
+        let burn_rate = fee_cache.burn_rate;
         let burn_amount = fee_amount
             .checked_mul(burn_rate as i128)
             .and_then(|v| v.checked_div(10_000))
@@ -605,7 +648,7 @@ impl FeeCollector {
             .ok_or(ContractError::ArithmeticOverflow)?;
 
         if burn_amount > 0 {
-            token::Client::new(&env, &token).burn(&env.current_contract_address(), &burn_amount);
+            token_client.burn(&env.current_contract_address(), &burn_amount);
             FeesBurned {
                 amount: burn_amount,
                 token: token.clone(),
@@ -649,28 +692,13 @@ impl FeeCollector {
         env: &Env,
         trader: &Address,
         token: &Address,
-        trade_asset: &Asset,
+        _trade_asset: &Asset,
     ) -> Result<u32, ContractError> {
+        let cache = fee_cache::load_tx_fee_config(env);
         let base_rate = rebates::get_fee_rate_for_user(env, trader);
-        let config = get_fee_optimization_config(env);
-        let network_score = get_network_condition_score(env);
-
-        let network_adjustment = (network_score as u64)
-            .saturating_mul(config.congestion_sensitivity_bps as u64)
-            .checked_div(10_000)
-            .unwrap_or(0) as u32;
-
-        let mut fee_rate = base_rate.saturating_add(network_adjustment);
-        fee_rate = fee_rate.max(config.min_effective_rate_bps);
-        fee_rate = fee_rate.min(config.max_dynamic_rate_bps.min(MAX_FEE_RATE_BPS));
-
-        if let Some(protocol_token) = storage::get_protocol_token(env) {
-            if token == &protocol_token {
-                fee_rate = (fee_rate / 2).max(MIN_FEE_RATE_BPS);
-            }
-        }
-
-        Ok(fee_rate)
+        Ok(fee_cache::effective_fee_rate_cached(
+            env, base_rate, token, &cache,
+        ))
     }
 
     /// Returns the current dynamic fee rate for a trade after tiered rebates and

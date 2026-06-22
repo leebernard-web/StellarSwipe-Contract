@@ -41,9 +41,17 @@ pub struct RateLimitConfig {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct RateLimitWindow {
+    pub window_start: u64,
+    pub count: u32,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub enum RateLimitKey {
     Timestamps(Address, ActionType),
+    Window(Address, ActionType),
     Config(ActionType),
     UserFirstAction(Address),
 }
@@ -84,6 +92,49 @@ pub fn set_config(env: &Env, action: ActionType, config: RateLimitConfig) {
     env.storage()
         .instance()
         .set(&RateLimitKey::Config(action), &config);
+}
+
+fn get_window(env: &Env, user: &Address, action: &ActionType) -> Option<RateLimitWindow> {
+    env.storage()
+        .persistent()
+        .get(&RateLimitKey::Window(user.clone(), action.clone()))
+}
+
+fn save_window(env: &Env, user: &Address, action: &ActionType, window: &RateLimitWindow) {
+    env.storage()
+        .persistent()
+        .set(&RateLimitKey::Window(user.clone(), action.clone()), window);
+}
+
+/// O(1) counter-based window count; migrates legacy timestamp vectors on first read.
+fn current_window_count(
+    env: &Env,
+    user: &Address,
+    action: &ActionType,
+    config: &RateLimitConfig,
+    now: u64,
+) -> u32 {
+    if let Some(window) = get_window(env, user, action) {
+        if now.saturating_sub(window.window_start) >= config.window_secs {
+            return 0;
+        }
+        return window.count;
+    }
+
+    // Legacy migration: count timestamps still inside the window once, then discard.
+    let timestamps = get_timestamps(env, user, action);
+    let count = timestamps
+        .iter()
+        .filter(|t| now.saturating_sub(*t) < config.window_secs)
+        .count() as u32;
+    if count > 0 {
+        let window = RateLimitWindow {
+            window_start: now,
+            count,
+        };
+        save_window(env, user, action, &window);
+    }
+    count
 }
 
 fn get_timestamps(env: &Env, user: &Address, action: &ActionType) -> Vec<u64> {
@@ -146,11 +197,7 @@ pub fn check_rate_limit(
 
     let max = effective_max(&config, first_action, now, trust_score);
 
-    let timestamps = get_timestamps(env, user, &action);
-    let recent_count = timestamps
-        .iter()
-        .filter(|t| now.saturating_sub(*t) < config.window_secs)
-        .count() as u32;
+    let recent_count = current_window_count(env, user, &action, &config, now);
 
     if recent_count >= max {
         emit_rate_limit_hit(env, user.clone(), action, recent_count, max);
@@ -167,28 +214,19 @@ pub fn record_action(env: &Env, user: &Address, action: ActionType) {
     record_first_action_if_new(env, user, now);
 
     let config = get_config(env, &action);
-    let mut timestamps = get_timestamps(env, user, &action);
 
-    // Prune entries outside the window first
-    let mut pruned: Vec<u64> = Vec::new(env);
-    for t in timestamps.iter() {
-        if now.saturating_sub(t) < config.window_secs {
-            pruned.push_back(t);
-        }
+    let mut window = get_window(env, user, &action).unwrap_or(RateLimitWindow {
+        window_start: now,
+        count: 0,
+    });
+
+    if now.saturating_sub(window.window_start) >= config.window_secs {
+        window.window_start = now;
+        window.count = 0;
     }
 
-    // Cap at MAX_STORED_TIMESTAMPS (drop oldest if needed)
-    while pruned.len() >= MAX_STORED_TIMESTAMPS {
-        // Remove the first (oldest) element by rebuilding
-        let mut tmp: Vec<u64> = Vec::new(env);
-        for i in 1..pruned.len() {
-            tmp.push_back(pruned.get(i).unwrap());
-        }
-        pruned = tmp;
-    }
-
-    pruned.push_back(now);
-    save_timestamps(env, user, &action, &pruned);
+    window.count = window.count.saturating_add(1);
+    save_window(env, user, &action, &window);
 }
 
 // ── Event ────────────────────────────────────────────────────────────────────
@@ -211,118 +249,144 @@ fn emit_rate_limit_hit(env: &Env, user: Address, action: ActionType, count: u32,
 mod tests {
     use super::*;
     use soroban_sdk::{
+        contract, contractimpl,
         testutils::{Address as _, Ledger},
-        Env,
+        Address, Env,
     };
 
-    fn setup() -> (Env, Address) {
+    #[contract]
+    struct RateLimitHarness;
+
+    #[contractimpl]
+    impl RateLimitHarness {}
+
+    fn setup() -> (Env, Address, Address) {
         let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(RateLimitHarness, ());
         let user = Address::generate(&env);
-        (env, user)
+        (env, contract_id, user)
+    }
+
+    fn run<F>(env: &Env, contract_id: &Address, f: F)
+    where
+        F: FnOnce(),
+    {
+        env.as_contract(contract_id, f);
     }
 
     #[test]
     fn test_signal_submission_limit() {
-        let (env, user) = setup();
-        // 10 submissions should succeed
-        for _ in 0..10 {
-            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
-            record_action(&env, &user, ActionType::SignalSubmission);
-        }
-        // 11th must fail
-        assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_err());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            for _ in 0..10 {
+                assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
+                record_action(&env, &user, ActionType::SignalSubmission);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_err());
+        });
     }
 
     #[test]
     fn test_window_reset_after_expiry() {
-        let (env, user) = setup();
-        for _ in 0..10 {
-            check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).unwrap();
-            record_action(&env, &user, ActionType::SignalSubmission);
-        }
-        // Advance time past the 1-hour window
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + SECONDS_PER_HOUR + 1);
-        // Should succeed again
-        assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            for _ in 0..10 {
+                check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).unwrap();
+                record_action(&env, &user, ActionType::SignalSubmission);
+            }
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + SECONDS_PER_HOUR + 1);
+            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
+        });
     }
 
     #[test]
     fn test_trade_execution_limit() {
-        let (env, user) = setup();
-        for _ in 0..20 {
-            assert!(check_rate_limit(&env, &user, ActionType::TradeExecution, 0).is_ok());
-            record_action(&env, &user, ActionType::TradeExecution);
-        }
-        assert!(check_rate_limit(&env, &user, ActionType::TradeExecution, 0).is_err());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            for _ in 0..20 {
+                assert!(check_rate_limit(&env, &user, ActionType::TradeExecution, 0).is_ok());
+                record_action(&env, &user, ActionType::TradeExecution);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::TradeExecution, 0).is_err());
+        });
     }
 
     #[test]
     fn test_stake_change_daily_limit() {
-        let (env, user) = setup();
-        for _ in 0..5 {
-            assert!(check_rate_limit(&env, &user, ActionType::StakeChange, 0).is_ok());
-            record_action(&env, &user, ActionType::StakeChange);
-        }
-        assert!(check_rate_limit(&env, &user, ActionType::StakeChange, 0).is_err());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            for _ in 0..5 {
+                assert!(check_rate_limit(&env, &user, ActionType::StakeChange, 0).is_ok());
+                record_action(&env, &user, ActionType::StakeChange);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::StakeChange, 0).is_err());
+        });
     }
 
     #[test]
     fn test_follow_action_daily_limit() {
-        let (env, user) = setup();
-        for _ in 0..50 {
-            assert!(check_rate_limit(&env, &user, ActionType::FollowAction, 0).is_ok());
-            record_action(&env, &user, ActionType::FollowAction);
-        }
-        assert!(check_rate_limit(&env, &user, ActionType::FollowAction, 0).is_err());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            for _ in 0..50 {
+                assert!(check_rate_limit(&env, &user, ActionType::FollowAction, 0).is_ok());
+                record_action(&env, &user, ActionType::FollowAction);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::FollowAction, 0).is_err());
+        });
     }
 
     #[test]
     fn test_established_user_gets_2x_limit() {
-        let (env, user) = setup();
-        // Simulate user first action 31 days ago
-        let now = env.ledger().timestamp();
-        let first = now.saturating_sub(31 * SECONDS_PER_DAY);
-        env.storage()
-            .persistent()
-            .set(&RateLimitKey::UserFirstAction(user.clone()), &first);
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            env.ledger().set_timestamp(100_000_000);
+            let now = env.ledger().timestamp();
+            let first = now.saturating_sub(31 * SECONDS_PER_DAY);
+            env.storage()
+                .persistent()
+                .set(&RateLimitKey::UserFirstAction(user.clone()), &first);
 
-        // Established user with trust_score >= 60 gets 20 signal submissions per hour
-        for _ in 0..20 {
-            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 60).is_ok());
-            record_action(&env, &user, ActionType::SignalSubmission);
-        }
-        assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 60).is_err());
+            // Established user with trust_score >= 60 gets 20 signal submissions per hour
+            for _ in 0..20 {
+                assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 60).is_ok());
+                record_action(&env, &user, ActionType::SignalSubmission);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 60).is_err());
+        });
     }
 
     #[test]
     fn test_admin_config_update_applies_immediately() {
-        let (env, user) = setup();
-        // Lower the limit to 3
-        set_config(
-            &env,
-            ActionType::SignalSubmission,
-            RateLimitConfig {
-                window_secs: SECONDS_PER_HOUR,
-                max_actions: 3,
-            },
-        );
-        for _ in 0..3 {
-            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
-            record_action(&env, &user, ActionType::SignalSubmission);
-        }
-        assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_err());
+        let (env, contract_id, user) = setup();
+        run(&env, &contract_id, || {
+            set_config(
+                &env,
+                ActionType::SignalSubmission,
+                RateLimitConfig {
+                    window_secs: SECONDS_PER_HOUR,
+                    max_actions: 3,
+                },
+            );
+            for _ in 0..3 {
+                assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_ok());
+                record_action(&env, &user, ActionType::SignalSubmission);
+            }
+            assert!(check_rate_limit(&env, &user, ActionType::SignalSubmission, 0).is_err());
+        });
     }
 
     #[test]
     fn test_different_users_independent() {
-        let (env, user1) = setup();
+        let (env, contract_id, user1) = setup();
         let user2 = Address::generate(&env);
-        for _ in 0..10 {
-            check_rate_limit(&env, &user1, ActionType::SignalSubmission, 0).unwrap();
-            record_action(&env, &user1, ActionType::SignalSubmission);
-        }
-        // user2 is unaffected
-        assert!(check_rate_limit(&env, &user2, ActionType::SignalSubmission, 0).is_ok());
+        run(&env, &contract_id, || {
+            for _ in 0..10 {
+                check_rate_limit(&env, &user1, ActionType::SignalSubmission, 0).unwrap();
+                record_action(&env, &user1, ActionType::SignalSubmission);
+            }
+            assert!(check_rate_limit(&env, &user2, ActionType::SignalSubmission, 0).is_ok());
+        });
     }
 }

@@ -7,6 +7,7 @@ pub mod emergency;
 pub mod health;
 pub mod multisig;
 pub mod oracle;
+pub mod perf;
 pub mod rate_limit;
 pub mod replay_protection;
 
@@ -20,6 +21,12 @@ pub use constants::{
 };
 pub use emergency::PauseState;
 pub use health::{health_uninitialized, placeholder_admin, HealthStatus};
+pub use perf::{
+    mark_operation, op_batch_execute, op_collect_fee, op_create_signal, op_execute_trade,
+    regression_budget_limit, tx_cache_or_compute, BASELINE_AUTO_TRADE_INSTRUCTIONS,
+    BASELINE_COPY_TRADE_INSTRUCTIONS, BASELINE_FEE_COLLECT_INSTRUCTIONS,
+    BASELINE_SIGNAL_SUBMIT_INSTRUCTIONS, DEFAULT_INSTRUCTION_BUDGET, REGRESSION_BUDGET_PCT,
+};
 pub use multisig::{
     emit_approval_recorded, emit_proposal_approved, emit_proposal_cancelled,
     emit_proposal_created, emit_proposal_executed, emit_timelock_config_updated,

@@ -839,6 +839,7 @@ impl SignalRegistry {
         let mut signals = Self::get_signals_map(env);
         signals.set(id, signal);
         Self::save_signals_map(env, &signals);
+        validation::increment_provider_active_count(env, &provider);
 
         // Update tag popularity
         categories::increment_tag_popularity(env, &unique_tags);
@@ -1367,6 +1368,10 @@ impl SignalRegistry {
         // Save updated signal
         signals.set(signal_id, signal.clone());
         Self::save_signals_map(&env, &signals);
+
+        if old_status == SignalStatus::Active && new_status != SignalStatus::Active {
+            validation::decrement_provider_active_count(&env, &signal.provider);
+        }
 
         let provider_for_contest = signal.provider.clone();
 

@@ -84,6 +84,33 @@ pub struct BatchTradeResult {
     pub error_code: u32,
 }
 
+/// Instance config hoisted once per `batch_execute` call to amortize storage reads.
+#[derive(Clone)]
+struct BatchExecutionContext {
+    portfolio: Address,
+    estimated_fee: i128,
+    daily_limit: i128,
+    circuit_breaker_active: bool,
+}
+
+fn prepare_batch_context(env: &Env) -> Result<BatchExecutionContext, ContractError> {
+    let portfolio = env
+        .storage()
+        .instance()
+        .get(&StorageKey::UserPortfolio)
+        .ok_or(ContractError::NotInitialized)?;
+    Ok(BatchExecutionContext {
+        portfolio,
+        estimated_fee: effective_estimated_fee(env),
+        daily_limit: env
+            .storage()
+            .instance()
+            .get(&StorageKey::DailyVolumeLimit)
+            .unwrap_or(0i128),
+        circuit_breaker_active: market_circuit_breaker_active(env),
+    })
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AllocationTarget {
@@ -252,6 +279,7 @@ fn execute_market_copy_trade(
     amount: i128,
     portfolio_pct_bps: Option<u32>,
     require_user_auth: bool,
+    batch_ctx: Option<&BatchExecutionContext>,
 ) -> Result<(), ContractError> {
     if require_user_auth {
         user.require_auth();
@@ -261,7 +289,10 @@ fn execute_market_copy_trade(
         return Err(ContractError::InvalidAmount);
     }
 
-    if market_circuit_breaker_active(env) {
+    let cb_active = batch_ctx
+        .map(|c| c.circuit_breaker_active)
+        .unwrap_or_else(|| market_circuit_breaker_active(env));
+    if cb_active {
         return Err(ContractError::CircuitBreakerActive);
     }
     check_open_interest_limit(env, &token, amount)?;
@@ -279,11 +310,14 @@ fn execute_market_copy_trade(
     env.storage().temporary().set(&lock_key, &true);
 
     // ── Daily volume limit check ───────────────────────────────────────────
-    let limit: i128 = env
-        .storage()
-        .instance()
-        .get(&StorageKey::DailyVolumeLimit)
-        .unwrap_or(0i128);
+    let limit = batch_ctx
+        .map(|c| c.daily_limit)
+        .unwrap_or_else(|| {
+            env.storage()
+                .instance()
+                .get(&StorageKey::DailyVolumeLimit)
+                .unwrap_or(0i128)
+        });
     if limit > 0 {
         let today: u64 = env.ledger().timestamp() / 86_400;
         let day_key = StorageKey::DailyVolumeDay(user.clone());
@@ -304,12 +338,15 @@ fn execute_market_copy_trade(
     }
 
     // ── Read cached config from instance storage (no cross-contract call) ─
-    let portfolio: Address = match env.storage().instance().get(&StorageKey::UserPortfolio) {
-        Some(portfolio) => portfolio,
-        None => {
-            env.storage().temporary().remove(&lock_key);
-            return Err(ContractError::NotInitialized);
-        }
+    let portfolio: Address = match batch_ctx.map(|c| c.portfolio.clone()) {
+        Some(p) => p,
+        None => match env.storage().instance().get(&StorageKey::UserPortfolio) {
+            Some(portfolio) => portfolio,
+            None => {
+                env.storage().temporary().remove(&lock_key);
+                return Err(ContractError::NotInitialized);
+            }
+        },
     };
 
     let exempt = {
@@ -329,7 +366,9 @@ fn execute_market_copy_trade(
         };
 
     // ── Cross-contract call #1: SEP-41 balance check ──────────────────────
-    let fee = effective_estimated_fee(env);
+    let fee = batch_ctx
+        .map(|c| c.estimated_fee)
+        .unwrap_or_else(|| effective_estimated_fee(env));
     let bal_key = StorageKey::LastInsufficientBalance(user.clone());
     let use_fee_fallback = match check_user_balance(env, &user, &token, effective_amount, fee) {
         Ok(()) => {
@@ -691,7 +730,7 @@ impl TradeExecutorContract {
     ) -> Result<(), ContractError> {
         match order_type {
             OrderType::Market => {
-                execute_market_copy_trade(&env, user, token, amount, portfolio_pct_bps, true)
+                execute_market_copy_trade(&env, user, token, amount, portfolio_pct_bps, true, None)
             }
             OrderType::Limit => {
                 user.require_auth();
@@ -833,6 +872,7 @@ impl TradeExecutorContract {
                     order.amount,
                     order.portfolio_pct_bps,
                     false,
+                    None,
                 )?;
                 env.storage()
                     .instance()
@@ -1051,18 +1091,19 @@ impl TradeExecutorContract {
             return Err(ContractError::InvalidAmount);
         }
 
+        let batch_ctx = prepare_batch_context(&env)?;
         let mut results: Vec<BatchTradeResult> = Vec::new(&env);
 
         for i in 0..len {
             let trade = trades.get(i).unwrap();
-            let outcome = Self::execute_copy_trade(
-                env.clone(),
-                trade.user,
-                trade.token,
+            let outcome = execute_market_copy_trade(
+                &env,
+                trade.user.clone(),
+                trade.token.clone(),
                 trade.amount,
                 None,
-                OrderType::Market,
-                None,
+                true,
+                Some(&batch_ctx),
             );
             let result = match outcome {
                 Ok(()) => BatchTradeResult {
