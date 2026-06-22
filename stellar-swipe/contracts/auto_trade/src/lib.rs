@@ -833,6 +833,8 @@ impl AutoTradeContract {
         user_b: Address,
     ) -> Result<portfolio::PortfolioComparison, AutoTradeError> {
         portfolio::compare_portfolios(&env, user_a, user_b)
+    }
+
     /// Set risk parity configuration
     pub fn set_risk_parity_config(
         env: Env,
@@ -1021,7 +1023,6 @@ fn failed_simulation(env: &Env, reason: &str) -> TradeSimulation {
     }
 }
 
-mod test;
     /// Returns estimated storage usage metrics.
     ///
     /// # Estimation methodology
