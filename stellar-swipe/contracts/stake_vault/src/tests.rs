@@ -54,6 +54,34 @@ fn setup() -> (Env, Address, Address, Address, Address) {
     (env, vault_id, token, admin, signal_registry)
 }
 
+/// Vault wired to a malicious token that re-enters `withdraw_stake` during `transfer`.
+fn setup_with_reentrant_token() -> (Env, Address, Address, Address, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signal_registry = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let token_id = env.register(ReentrantToken, ());
+    let vault_id = env.register(StakeVaultContract, ());
+    StakeVaultContractClient::new(&env, &vault_id).initialize(&admin, &token_id, &signal_registry);
+    let token_client = ReentrantTokenClient::new(&env, &token_id);
+    token_client.set_vault(&vault_id);
+    token_client.set_staker(&staker);
+    (env, vault_id, token_id, admin, signal_registry, staker)
+}
+
+/// Vault wired to a benign token that records cross-contract `transfer` invocations.
+fn setup_with_recording_token() -> (Env, Address, Address, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signal_registry = Address::generate(&env);
+    let token_id = env.register(TransferRecordingToken, ());
+    let vault_id = env.register(StakeVaultContract, ());
+    StakeVaultContractClient::new(&env, &vault_id).initialize(&admin, &token_id, &signal_registry);
+    (env, vault_id, token_id, admin, signal_registry)
+}
+
 // ── Basic withdraw tests ──────────────────────────────────────────────────────
 
 #[test]
@@ -110,7 +138,7 @@ impl ReentrantToken {
             .instance()
             .set(&soroban_sdk::symbol_short!("staker"), &staker);
     }
-    /// Attempt reentrancy on every transfer call.
+    /// SEP-41 callback invoked by `withdraw_stake`'s cross-contract transfer.
     pub fn transfer(env: Env, _from: Address, _to: MuxedAddress, _amount: i128) {
         let vault: Address = env
             .storage()
@@ -171,30 +199,155 @@ impl ReentrantToken {
     pub fn mint(_env: Env, _to: Address, _amount: i128) {}
 }
 
+/// Benign SEP-41 mock that records `transfer` calls without re-entering the vault.
+#[contract]
+pub struct TransferRecordingToken;
+
+#[contractimpl]
+impl TransferRecordingToken {
+    pub fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128) {
+        let to_addr = to.address();
+        env.storage().instance().set(&soroban_sdk::symbol_short!("called"), &true);
+        env.storage().instance().set(&soroban_sdk::symbol_short!("from"), &from);
+        env.storage().instance().set(&soroban_sdk::symbol_short!("to"), &to_addr);
+        env.storage().instance().set(&soroban_sdk::symbol_short!("amount"), &amount);
+    }
+    pub fn transfer_was_called(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("called"))
+            .unwrap_or(false)
+    }
+    pub fn last_transfer_from(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("from"))
+            .unwrap()
+    }
+    pub fn last_transfer_to(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("to"))
+            .unwrap()
+    }
+    pub fn last_transfer_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("amount"))
+            .unwrap()
+    }
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        0
+    }
+    pub fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {}
+    pub fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
+    pub fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
+        0
+    }
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
+    pub fn name(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "RecordingToken")
+    }
+    pub fn symbol(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "REC")
+    }
+    pub fn mint(_env: Env, _to: Address, _amount: i128) {}
+}
+
+/// Malicious token is invoked on the cross-contract transfer path during withdraw.
 #[test]
 fn reentrant_withdraw_is_blocked() {
+    use soroban_sdk::testutils::Ledger;
+
+    let (env, vault_id, token_id, _admin, _registry, staker) = setup_with_reentrant_token();
+    let amount: i128 = 1_000_000;
+
+    env.ledger().with_mut(|l| l.sequence_number = 5);
+    seed_v2_stake(&env, &vault_id, &staker, amount, 0);
+
+    let client = StakeVaultContractClient::new(&env, &vault_id);
+    assert_eq!(client.withdraw_stake(&staker), amount);
+    assert!(
+        ReentrantTokenClient::new(&env, &token_id).transfer_was_called(),
+        "withdraw_stake must reach token.transfer"
+    );
+    assert_eq!(client.get_stake(&staker), 0);
+    assert_eq!(
+        client.try_withdraw_stake(&staker),
+        Err(Ok(StakeVaultError::NoStake)),
+        "stake must not be withdrawable twice"
+    );
+}
+
+/// Holding the execution lock rejects a reentrant `withdraw_stake` with
+/// `ReentrancyDetected` (models the malicious `ReentrantToken` attack).
+#[test]
+fn execution_lock_blocks_concurrent_withdraw() {
     use soroban_sdk::testutils::Ledger;
     let (env, vault_id, token, _admin, _registry) = setup();
     let staker = Address::generate(&env);
     let amount: i128 = 1_000_000;
 
     StellarAssetClient::new(&env, &token).mint(&vault_id, &amount);
-    // Advance ledger so flash-loan guard doesn't interfere (seed has no LastStakeLedger).
     env.ledger().with_mut(|l| l.sequence_number = 5);
     seed_v2_stake(&env, &vault_id, &staker, amount, 0);
 
-    // Manually set the reentrancy lock as if we're inside withdraw_stake.
     env.as_contract(&vault_id, || {
         env.storage()
             .temporary()
             .set(&Symbol::new(&env, "WithdrawLock"), &true);
     });
 
-    // A second withdraw_stake call while the lock is held must return ReentrancyDetected.
-    let result = env.as_contract(&vault_id, || {
-        StakeVaultContract::withdraw_stake(env.clone(), staker)
-    });
-    assert_eq!(result, Err(StakeVaultError::ReentrancyDetected));
+    let result = StakeVaultContractClient::new(&env, &vault_id).try_withdraw_stake(&staker);
+    assert_eq!(result, Err(Ok(StakeVaultError::ReentrancyDetected)));
+}
+
+/// Normal withdrawal succeeds when the token does not re-enter the vault.
+#[test]
+fn normal_withdrawal_succeeds_without_reentrancy() {
+    use soroban_sdk::testutils::Ledger;
+    let (env, vault_id, token_id, _admin, _registry) = setup_with_recording_token();
+    let staker = Address::generate(&env);
+    let amount: i128 = 2_500_000;
+
+    env.ledger().with_mut(|l| l.sequence_number = 5);
+    seed_v2_stake(&env, &vault_id, &staker, amount, 0);
+
+    let client = StakeVaultContractClient::new(&env, &vault_id);
+    assert_eq!(client.withdraw_stake(&staker), amount);
+    assert_eq!(client.get_stake(&staker), 0);
+
+    let token_client = TransferRecordingTokenClient::new(&env, &token_id);
+    assert!(token_client.transfer_was_called());
+    assert_eq!(token_client.last_transfer_from(), vault_id);
+    assert_eq!(token_client.last_transfer_to(), staker);
+    assert_eq!(token_client.last_transfer_amount(), amount);
+}
+
+/// Regression: `withdraw_stake` reaches the SEP-41 `transfer` cross-contract path.
+#[test]
+fn withdraw_stake_cross_contract_transfer_path() {
+    use soroban_sdk::testutils::Ledger;
+    let (env, vault_id, token_id, _admin, _registry) = setup_with_recording_token();
+    let staker = Address::generate(&env);
+    let amount: i128 = 1_000_000;
+
+    env.ledger().with_mut(|l| l.sequence_number = 10);
+    seed_v2_stake(&env, &vault_id, &staker, amount, 0);
+
+    let client = StakeVaultContractClient::new(&env, &vault_id);
+    client.withdraw_stake(&staker);
+
+    let token_client = TransferRecordingTokenClient::new(&env, &token_id);
+    assert!(
+        token_client.transfer_was_called(),
+        "withdraw_stake must invoke token.transfer"
+    );
+    assert_eq!(token_client.last_transfer_from(), vault_id);
+    assert_eq!(token_client.last_transfer_to(), staker);
+    assert_eq!(token_client.last_transfer_amount(), amount);
 }
 
 #[test]
