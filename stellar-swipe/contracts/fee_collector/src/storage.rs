@@ -1,5 +1,5 @@
 use shared::errors::{ErrorCategory, RecoveryStrategy};
-use soroban_sdk::{contracttype, Address, Env, String};
+use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use stellar_swipe_common::Asset;
 
 pub const MAX_FEE_RATE_BPS: u32 = 100; // 1%

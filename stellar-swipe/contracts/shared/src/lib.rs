@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod auth;
+pub mod errors;
 #[allow(deprecated)]
 pub mod cross_contract;
 #[allow(deprecated)]
@@ -14,3 +15,4 @@ pub use cross_contract::{
     CrossContractVersionClient, MessageStatus, MAX_MESSAGE_SIZE,
 };
 pub use version::{ContractKind, VersionError};
+pub use errors::{ErrorCategory, RecoveryStrategy};
