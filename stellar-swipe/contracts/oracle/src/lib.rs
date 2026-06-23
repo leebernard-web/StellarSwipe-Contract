@@ -1,5 +1,6 @@
 #![no_std]
 
+#[allow(deprecated)]
 mod admin;
 mod conversion;
 mod errors;

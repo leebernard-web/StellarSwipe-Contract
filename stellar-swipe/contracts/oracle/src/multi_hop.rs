@@ -1,7 +1,6 @@
 use crate::errors::OracleError;
-use crate::sdex;
 use crate::storage;
-use soroban_sdk::{vec, Env, Map, Vec};
+use soroban_sdk::{Env, Map, Vec};
 use stellar_swipe_common::{Asset, AssetPair};
 
 const PRECISION: i128 = 10_000_000;
@@ -256,7 +255,7 @@ fn cache_path(env: &Env, from: &Asset, to: &Asset, path: &LiquidityPath) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{add_available_pair, set_base_currency, set_price};
+    use crate::storage::{add_available_pair, set_price};
     use soroban_sdk::{testutils::Address as _, Address, String};
 
     fn create_asset(env: &Env, code: &str) -> Asset {

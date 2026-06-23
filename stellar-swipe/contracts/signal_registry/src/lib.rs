@@ -9,6 +9,7 @@ mod community_voting;
 mod contests;
 mod cross_chain;
 mod errors;
+#[allow(deprecated)]
 mod events;
 mod expiry;
 mod fees;
