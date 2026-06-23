@@ -13,7 +13,7 @@ fn test_propose_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -27,7 +27,10 @@ fn test_propose_admin_transfer_auto_trade() {
 
     // NewAdmin should NOT be able to set_guardian yet
     let result = client.try_set_guardian(&new_admin, &Address::generate(&env));
-    assert!(result.is_err(), "New admin should not have admin privileges before accepting");
+    assert!(
+        result.is_err(),
+        "New admin should not have admin privileges before accepting"
+    );
 }
 
 #[test]
@@ -35,7 +38,7 @@ fn test_accept_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -59,7 +62,7 @@ fn test_accept_with_wrong_address_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -79,7 +82,7 @@ fn test_cancel_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -101,7 +104,7 @@ fn test_transfer_expiry_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -130,7 +133,7 @@ fn test_non_admin_cannot_propose_transfer() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -140,7 +143,10 @@ fn test_non_admin_cannot_propose_transfer() {
     client.initialize(&admin);
 
     let result = client.try_propose_admin_transfer(&attacker, &victim);
-    assert!(result.is_err(), "Non-admin must not be able to propose admin transfer");
+    assert!(
+        result.is_err(),
+        "Non-admin must not be able to propose admin transfer"
+    );
 }
 
 /// Guardian cannot propose or accept an admin transfer.
@@ -149,7 +155,7 @@ fn test_guardian_cannot_escalate_to_admin() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -160,11 +166,17 @@ fn test_guardian_cannot_escalate_to_admin() {
 
     // Guardian cannot propose a transfer
     let propose_result = client.try_propose_admin_transfer(&guardian, &guardian);
-    assert!(propose_result.is_err(), "Guardian must not propose admin transfer");
+    assert!(
+        propose_result.is_err(),
+        "Guardian must not propose admin transfer"
+    );
 
     // Guardian cannot accept a transfer that was never proposed
     let accept_result = client.try_accept_admin_transfer(&guardian);
-    assert!(accept_result.is_err(), "Guardian must not accept non-existent transfer");
+    assert!(
+        accept_result.is_err(),
+        "Guardian must not accept non-existent transfer"
+    );
 }
 
 /// Double-initialization is blocked — admin cannot be overwritten via re-init.
@@ -173,7 +185,7 @@ fn test_reinitialize_blocked() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -196,7 +208,7 @@ fn test_pending_admin_has_no_privileges_before_accept() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -207,11 +219,17 @@ fn test_pending_admin_has_no_privileges_before_accept() {
 
     // Pending admin cannot set guardian before accepting
     let result = client.try_set_guardian(&new_admin, &Address::generate(&env));
-    assert!(result.is_err(), "Pending admin must not have admin privileges before accepting");
+    assert!(
+        result.is_err(),
+        "Pending admin must not have admin privileges before accepting"
+    );
 
     // Pending admin cannot cancel the transfer
     let cancel_result = client.try_cancel_admin_transfer(&new_admin);
-    assert!(cancel_result.is_err(), "Pending admin must not cancel transfer");
+    assert!(
+        cancel_result.is_err(),
+        "Pending admin must not cancel transfer"
+    );
 }
 
 /// After a completed transfer, the old admin loses all privileges.
@@ -220,7 +238,7 @@ fn test_old_admin_loses_privileges_after_transfer() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -232,5 +250,8 @@ fn test_old_admin_loses_privileges_after_transfer() {
 
     // Old admin can no longer set guardian
     let result = client.try_set_guardian(&admin, &Address::generate(&env));
-    assert!(result.is_err(), "Old admin must lose privileges after transfer");
+    assert!(
+        result.is_err(),
+        "Old admin must lose privileges after transfer"
+    );
 }

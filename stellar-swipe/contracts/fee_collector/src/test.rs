@@ -20,6 +20,11 @@ fn mark_trader_has_traded(env: &Env, contract_id: &Address, trader: &Address) {
     });
 }
 
+/// Disable revenue-share diversion so treasury assertions reflect fee minus burn only.
+fn disable_revenue_share(client: &FeeCollectorClient<'_>) {
+    client.set_revenue_share_rate_bps(&0u32);
+}
+
 // Stellar burn address (all-zeros public key encoded as strkey)
 const _BURN_ADDRESS: &str = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
@@ -439,6 +444,7 @@ fn test_collect_fee_tracks_volume_and_applies_rebate_tiers() {
     let (oracle_id, asset) = setup_oracle(&env, 10_000_000);
     client.set_oracle_contract(&oracle_id);
     client.set_fee_rate(&30u32);
+    disable_revenue_share(&client);
 
     StellarAssetClient::new(&env, &token).mint(&trader, &(100_000 * 10_000_000));
 
@@ -514,6 +520,7 @@ fn test_collect_fee_requires_configured_oracle() {
     client.initialize(&admin);
 
     StellarAssetClient::new(&env, &token).mint(&trader, &(1_000 * 10_000_000));
+    mark_trader_has_traded(&env, &contract_id, &trader);
     let result = client.try_collect_fee(&trader, &token, &(1_000 * 10_000_000), &trade_asset(&env));
 
     assert_eq!(result, Err(Ok(ContractError::OracleNotConfigured)));
@@ -696,6 +703,7 @@ fn test_collect_fee_burn_amount_calculation() {
     client.set_oracle_contract(&oracle_id);
     client.set_fee_rate(&30u32);
     client.set_burn_rate(&1_000u32); // 10%
+    disable_revenue_share(&client);
 
     let trade_amount: i128 = 1_000_000;
     StellarAssetClient::new(&env, &token).mint(&trader, &trade_amount);
@@ -729,6 +737,7 @@ fn test_collect_fee_zero_burn_rate_full_treasury() {
     client.set_oracle_contract(&oracle_id);
     client.set_fee_rate(&30u32);
     client.set_burn_rate(&0u32);
+    disable_revenue_share(&client);
 
     let trade_amount: i128 = 1_000_000;
     StellarAssetClient::new(&env, &token).mint(&trader, &trade_amount);
@@ -942,6 +951,7 @@ fn test_burn_rounds_down_no_dust() {
     // fee_rate=30 bps, trade_amount=1_000_001 → fee = 1_000_001*30/10_000 = 3000 (truncated)
     client.set_fee_rate(&30u32);
     client.set_burn_rate(&1_000u32); // 10%
+    disable_revenue_share(&client);
 
     let trade_amount: i128 = 1_000_001;
     StellarAssetClient::new(&env, &token).mint(&trader, &trade_amount);
@@ -980,11 +990,13 @@ fn test_no_unwithdrawable_dust_accumulates() {
     client.set_oracle_contract(&oracle_id);
     client.set_fee_rate(&30u32);
     client.set_burn_rate(&3_333u32); // 33.33% — non-round to stress remainder
+    disable_revenue_share(&client);
 
     // Use a trade amount that produces a non-round fee
     let trade_amount: i128 = 777_777;
     StellarAssetClient::new(&env, &token).mint(&trader, &trade_amount);
 
+    mark_trader_has_traded(&env, &contract_id, &trader);
     let fee = client.collect_fee(&trader, &token, &trade_amount, &asset);
     // fee = 777_777 * 30 / 10_000 = 2333 (truncated)
     assert_eq!(fee, 2_333);
@@ -1021,6 +1033,7 @@ fn test_fee_rounded_to_zero_error() {
     let trade_amount: i128 = 9_999;
     StellarAssetClient::new(&env, &token).mint(&trader, &trade_amount);
 
+    mark_trader_has_traded(&env, &contract_id, &trader);
     let result = client.try_collect_fee(&trader, &token, &trade_amount, &asset);
     assert_eq!(result, Err(Ok(ContractError::FeeRoundedToZero)));
 }
@@ -1053,6 +1066,7 @@ fn test_collect_fee_overflow_returns_error() {
 
     // i128::MAX * 30 overflows — checked_mul returns None → ArithmeticOverflow
     StellarAssetClient::new(&env, &token).mint(&trader, &i128::MAX);
+    mark_trader_has_traded(&env, &contract_id, &trader);
     let result = client.try_collect_fee(&trader, &token, &i128::MAX, &asset);
     assert_eq!(result, Err(Ok(ContractError::ArithmeticOverflow)));
 }
@@ -1155,7 +1169,7 @@ fn test_audit_balances_no_mismatch() {
     let (token, _contract_id, client) = setup_audit(&env, 1_000i128);
 
     let tokens = soroban_sdk::vec![&env, token.clone()];
-    let mismatches = client.audit_balances(&tokens).unwrap();
+    let mismatches = client.audit_balances(&tokens);
 
     // Stored balance equals on-chain balance: no mismatches
     assert_eq!(mismatches.len(), 0);
@@ -1172,7 +1186,7 @@ fn test_audit_balances_detects_surplus() {
     StellarAssetClient::new(&env, &token).mint(&contract_id, &500i128);
 
     let tokens = soroban_sdk::vec![&env, token.clone()];
-    let mismatches = client.audit_balances(&tokens).unwrap();
+    let mismatches = client.audit_balances(&tokens);
 
     assert_eq!(mismatches.len(), 1);
     let m = mismatches.get(0).unwrap();
@@ -1195,7 +1209,7 @@ fn test_audit_balances_detects_deficit() {
     });
 
     let tokens = soroban_sdk::vec![&env, token.clone()];
-    let mismatches = client.audit_balances(&tokens).unwrap();
+    let mismatches = client.audit_balances(&tokens);
 
     assert_eq!(mismatches.len(), 1);
     let m = mismatches.get(0).unwrap();
@@ -1233,7 +1247,7 @@ fn test_audit_balances_multiple_tokens() {
     });
 
     let tokens = soroban_sdk::vec![&env, token_a.clone(), token_b.clone()];
-    let mismatches = client.audit_balances(&tokens).unwrap();
+    let mismatches = client.audit_balances(&tokens);
 
     // Only token B should appear
     assert_eq!(mismatches.len(), 1);

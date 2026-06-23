@@ -48,4 +48,6 @@ pub enum DataKey {
     SignalRegistry,
     /// Per-user signal watchlist (Issue: signal watchlist).
     Watchlist(Address),
+    UserOnboardingStatus(Address),
+    UserOnboardingMilestone(Address),
 }

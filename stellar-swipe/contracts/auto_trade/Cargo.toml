@@ -34,3 +34,11 @@ name = "test_contract_upgrade"
 path = "tests/integration/test_contract_upgrade.rs"
 required-features = ["testutils"]
 
+[[test]]
+name = "test_amm_bridge"
+path = "tests/integration/test_amm_bridge.rs"
+required-features = ["testutils"]
+
+
+[lints]
+workspace = true

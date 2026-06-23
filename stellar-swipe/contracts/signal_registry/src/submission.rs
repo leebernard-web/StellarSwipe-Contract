@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 use crate::stake::{can_submit_signal, StakeInfo, DEFAULT_MINIMUM_STAKE};
-use crate::validation::{check_duplicate_signal, validate_rationale_hash_string, check_price_reasonableness};
+use crate::validation::{
+    check_duplicate_signal, check_price_reasonableness, validate_rationale_hash_string,
+};
 use soroban_sdk::{contracttype, Address, Env, Map, String};
 
 #[contracttype]
@@ -77,11 +79,10 @@ pub fn submit_signal(
     }
 
     // Validate rationale hash (must be present and not all zeros)
-    validate_rationale_hash_string(env, &rationale_hash)
-        .map_err(|e| match e {
-            crate::validation::RationaleHashError::MissingRationale => Error::MissingRationale,
-            crate::validation::RationaleHashError::ZeroHash => Error::MissingRationale,
-        })?;
+    validate_rationale_hash_string(env, &rationale_hash).map_err(|e| match e {
+        crate::validation::RationaleHashError::MissingRationale => Error::MissingRationale,
+        crate::validation::RationaleHashError::ZeroHash => Error::MissingRationale,
+    })?;
 
     // Check price reasonableness against oracle
     // If oracle is unavailable, the check is skipped (returns Ok(None))
@@ -99,10 +100,13 @@ pub fn submit_signal(
     }
 
     // Check for duplicate signals
-    check_duplicate_signal(env, storage, provider, &asset_pair, &action, price)
-        .map_err(|e| match e {
-            crate::validation::DuplicateCheckError::DuplicateSignal(id) => Error::DuplicateSignal(id),
-        })?;
+    check_duplicate_signal(env, storage, provider, &asset_pair, &action, price).map_err(
+        |e| match e {
+            crate::validation::DuplicateCheckError::DuplicateSignal(id) => {
+                Error::DuplicateSignal(id)
+            }
+        },
+    )?;
 
     // Generate signal ID
     let now = env.ledger().timestamp();
@@ -304,7 +308,7 @@ mod tests {
         #[allow(deprecated)]
         let zero_hash = String::from_slice(
             &env,
-            "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+            "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
         );
 
         let res = submit_signal(

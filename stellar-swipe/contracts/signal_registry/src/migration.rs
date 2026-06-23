@@ -41,8 +41,8 @@ fn v1_to_v2(_env: &Env, v1: &SignalV1) -> Signal {
         avg_copier_roi_bps: 0,
         copier_closed_count: 0,
         warning_emitted: false,
-            benchmark_return_bps: None,
-            alpha_bps: None,
+        benchmark_return_bps: None,
+        alpha_bps: None,
     }
 }
 
@@ -54,9 +54,7 @@ fn get_v1_map(env: &Env) -> Map<u64, SignalV1> {
 }
 
 fn save_v1_map(env: &Env, m: &Map<u64, SignalV1>) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::SignalsV1, m);
+    env.storage().instance().set(&StorageKey::SignalsV1, m);
 }
 
 fn get_v2_map(env: &Env) -> Map<u64, Signal> {
@@ -67,9 +65,7 @@ fn get_v2_map(env: &Env) -> Map<u64, Signal> {
 }
 
 fn save_v2_map(env: &Env, m: &Map<u64, Signal>) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::Signals, m);
+    env.storage().instance().set(&StorageKey::Signals, m);
 }
 
 fn get_migration_cursor(env: &Env) -> u64 {
@@ -80,7 +76,9 @@ fn get_migration_cursor(env: &Env) -> u64 {
 }
 
 fn set_migration_cursor(env: &Env, c: u64) {
-    env.storage().instance().set(&StorageKey::MigrationCursor, &c);
+    env.storage()
+        .instance()
+        .set(&StorageKey::MigrationCursor, &c);
 }
 
 fn get_migration_v1_target_total(env: &Env) -> Option<u32> {
@@ -176,10 +174,7 @@ pub fn migrate_signals_v1_to_v2(
     }
 
     if get_migration_v1_target_total(env).is_none() {
-        set_migration_v1_target_total(
-            env,
-            count_v1_keys(env, &v1, counter),
-        );
+        set_migration_v1_target_total(env, count_v1_keys(env, &v1, counter));
     }
     let target_total = get_migration_v1_target_total(env).unwrap_or(0);
 
@@ -272,6 +267,10 @@ pub(crate) fn test_seed_v1_signals(env: &Env, count: u64) {
     env.storage()
         .instance()
         .set(&StorageKey::SignalCounter, &count);
-    env.storage().instance().set(&StorageKey::MigrationCursor, &1u64);
-    env.storage().instance().remove(&StorageKey::MigrationV1TargetTotal);
+    env.storage()
+        .instance()
+        .set(&StorageKey::MigrationCursor, &1u64);
+    env.storage()
+        .instance()
+        .remove(&StorageKey::MigrationV1TargetTotal);
 }

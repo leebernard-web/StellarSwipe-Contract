@@ -1,8 +1,7 @@
 use crate::errors::OracleError;
-use crate::sdex;
 use crate::storage;
+use soroban_sdk::{Env, Map, Vec};
 use stellar_swipe_common::{Asset, AssetPair};
-use soroban_sdk::{vec, Env, Map, Vec};
 
 const PRECISION: i128 = 10_000_000;
 const MAX_HOPS: u32 = 3;
@@ -256,7 +255,7 @@ fn cache_path(env: &Env, from: &Asset, to: &Asset, path: &LiquidityPath) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{add_available_pair, set_base_currency, set_price};
+    use crate::storage::{add_available_pair, set_price};
     use soroban_sdk::{testutils::Address as _, Address, String};
 
     fn create_asset(env: &Env, code: &str) -> Asset {
@@ -273,43 +272,53 @@ mod tests {
         }
     }
 
+    fn with_oracle_contract<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Env) -> R,
+    {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::OracleContract);
+        env.as_contract(&contract_id, || f(&env))
+    }
+
     #[test]
     fn test_find_optimal_path_2_hops() {
-        let env = Env::default();
-        let token_a = create_asset(&env, "TOKENA");
-        let xlm = xlm(&env);
-        let token_b = create_asset(&env, "TOKENB");
+        with_oracle_contract(|env| {
+            let token_a = create_asset(env, "TOKENA");
+            let xlm = xlm(env);
+            let token_b = create_asset(env, "TOKENB");
 
-        // Set up pairs: TOKENA/XLM and XLM/TOKENB
-        let pair1 = AssetPair {
-            base: token_a.clone(),
-            quote: xlm.clone(),
-        };
-        let pair2 = AssetPair {
-            base: xlm.clone(),
-            quote: token_b.clone(),
-        };
+            // Set up pairs: TOKENA/XLM and XLM/TOKENB
+            let pair1 = AssetPair {
+                base: token_a.clone(),
+                quote: xlm.clone(),
+            };
+            let pair2 = AssetPair {
+                base: xlm.clone(),
+                quote: token_b.clone(),
+            };
 
-        set_price(&env, &pair1, 10 * PRECISION); // 1 TOKENA = 10 XLM
-        set_price(&env, &pair2, 2 * PRECISION); // 1 XLM = 2 TOKENB
+            set_price(env, &pair1, 10 * PRECISION); // 1 TOKENA = 10 XLM
+            set_price(env, &pair2, 2 * PRECISION); // 1 XLM = 2 TOKENB
 
-        add_available_pair(&env, pair1.clone());
-        add_available_pair(&env, pair2.clone());
+            add_available_pair(env, pair1.clone());
+            add_available_pair(env, pair2.clone());
 
-        let path =
-            find_optimal_path(&env, token_a.clone(), token_b.clone(), 100 * PRECISION).unwrap();
+            let path =
+                find_optimal_path(env, token_a.clone(), token_b.clone(), 100 * PRECISION).unwrap();
 
-        assert_eq!(path.hops.len(), 2);
-        assert_eq!(path.estimated_slippage, 20); // 10 bps per hop
+            assert_eq!(path.hops.len(), 2);
+            assert_eq!(path.estimated_slippage, 20); // 10 bps per hop
 
-        let final_amount = calculate_multi_hop_price(&env, path, 100 * PRECISION);
+            let final_amount = calculate_multi_hop_price(env, path, 100 * PRECISION);
 
-        // Manual calculation:
-        // 100 TOKENA -> XLM: 100 * 10 = 1000 XLM. Slippage 0.1% -> 999 XLM
-        // 999 XLM -> TOKENB: 999 * 2 = 1998 TOKENB. Slippage 0.1% -> 1996.002 -> 1996
-        // Precision is 10,000,000
-        // 999 * 2 * 9990 / 10000 = 1998 * 0.999 = 1996.002
-        assert_eq!(final_amount, 1996_0020000);
+            // Manual calculation:
+            // 100 TOKENA -> XLM: 100 * 10 = 1000 XLM. Slippage 0.1% -> 999 XLM
+            // 999 XLM -> TOKENB: 999 * 2 = 1998 TOKENB. Slippage 0.1% -> 1996.002 -> 1996
+            // Precision is 10,000,000
+            // 999 * 2 * 9990 / 10000 = 1998 * 0.999 = 1996.002
+            assert_eq!(final_amount, 1996_0020000);
+        });
     }
 
     #[test]
@@ -320,7 +329,7 @@ mod tests {
         let c = create_asset(&env, "C");
         let d = create_asset(&env, "D");
 
-        let graph = vec![
+        let graph = soroban_sdk::vec![
             &env,
             AssetPair {
                 base: a.clone(),
@@ -346,48 +355,50 @@ mod tests {
 
     #[test]
     fn test_slippage_limit() {
-        let env = Env::default();
-        let token_a = create_asset(&env, "TOKENA");
-        let token_b = create_asset(&env, "TOKENB");
-        let pair = AssetPair {
-            base: token_a.clone(),
-            quote: token_b.clone(),
-        };
+        with_oracle_contract(|env| {
+            let token_a = create_asset(env, "TOKENA");
+            let token_b = create_asset(env, "TOKENB");
+            let pair = AssetPair {
+                base: token_a.clone(),
+                quote: token_b.clone(),
+            };
 
-        set_price(&env, &pair, PRECISION);
-        add_available_pair(&env, pair);
+            set_price(env, &pair, PRECISION);
+            add_available_pair(env, pair);
 
-        // Huge amount to trigger high slippage (1B units > 10k units triggers volume slippage)
-        // 1B units = 10^9. Threshold is 1000.
-        // volume_slippage = (10^9 - 1000) / 10000 * 5 bps
-        // (1,000,000,000 - 1000) / 10000 * 5 = 100,000 * 5 = 500,000 bps = 5000%
-        let result = find_optimal_path(&env, token_a, token_b, 1_000_000_000 * PRECISION);
-        assert!(result.is_err()); // Should hit SlippageExceeded
+            // Huge amount to trigger high slippage (1B units > 10k units triggers volume slippage)
+            // 1B units = 10^9. Threshold is 1000.
+            // volume_slippage = (10^9 - 1000) / 10000 * 5 bps
+            // (1,000,000,000 - 1000) / 10000 * 5 = 100,000 * 5 = 500,000 bps = 5000%
+            let result = find_optimal_path(env, token_a, token_b, 1_000_000_000 * PRECISION);
+            assert!(result.is_err()); // Should hit SlippageExceeded
+        });
     }
 
     #[test]
     fn test_path_caching() {
-        let env = Env::default();
-        let a = create_asset(&env, "A");
-        let b = create_asset(&env, "B");
-        let pair = AssetPair {
-            base: a.clone(),
-            quote: b.clone(),
-        };
+        with_oracle_contract(|env| {
+            let a = create_asset(env, "A");
+            let b = create_asset(env, "B");
+            let pair = AssetPair {
+                base: a.clone(),
+                quote: b.clone(),
+            };
 
-        set_price(&env, &pair, PRECISION);
-        add_available_pair(&env, pair.clone());
+            set_price(env, &pair, PRECISION);
+            add_available_pair(env, pair.clone());
 
-        let path1 = find_optimal_path(&env, a.clone(), b.clone(), 100 * PRECISION).unwrap();
+            let path1 = find_optimal_path(env, a.clone(), b.clone(), 100 * PRECISION).unwrap();
 
-        // Remove pair from available but it should still be in cache
-        let mut pairs = storage::get_available_pairs(&env);
-        pairs.remove(pair.clone());
-        env.storage()
-            .persistent()
-            .set(&storage::StorageKey::AvailablePairs, &pairs);
+            // Remove pair from available but it should still be in cache
+            let mut pairs = storage::get_available_pairs(env);
+            pairs.remove(pair.clone());
+            env.storage()
+                .persistent()
+                .set(&storage::StorageKey::AvailablePairs, &pairs);
 
-        let path2 = find_optimal_path(&env, a.clone(), b.clone(), 100 * PRECISION).unwrap();
-        assert_eq!(path1.hops.len(), path2.hops.len());
+            let path2 = find_optimal_path(env, a.clone(), b.clone(), 100 * PRECISION).unwrap();
+            assert_eq!(path1.hops.len(), path2.hops.len());
+        });
     }
 }

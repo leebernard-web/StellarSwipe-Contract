@@ -22,12 +22,12 @@ impl Default for BridgeRateLimits {
     fn default() -> Self {
         BridgeRateLimits {
             per_user_hourly_transfers: 10,
-            per_user_hourly_volume: 1_000_000_0000000,
+            per_user_hourly_volume: 10_000_000_000_000,
             per_user_daily_transfers: 50,
-            per_user_daily_volume: 5_000_000_0000000,
+            per_user_daily_volume: 50_000_000_000_000,
             global_hourly_capacity: 1000,
-            global_daily_volume: 100_000_000_0000000,
-            min_transfer_amount: 1_0000000,
+            global_daily_volume: 1_000_000_000_000_000,
+            min_transfer_amount: 10_000_000,
             cooldown_between_transfers: 30,
         }
     }
@@ -138,9 +138,7 @@ pub fn get_admin(env: &Env) -> Option<Address> {
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {
-    env.storage()
-        .persistent()
-        .set(&RateLimitKey::Admin, admin);
+    env.storage().persistent().set(&RateLimitKey::Admin, admin);
 }
 
 fn require_admin(env: &Env) -> Result<(), AutoTradeError> {
@@ -198,10 +196,8 @@ pub fn add_to_whitelist(env: &Env, user: &Address) -> Result<(), AutoTradeError>
         list.push_back(user.clone());
         set_whitelist(env, &list);
         #[allow(deprecated)]
-        env.events().publish(
-            (Symbol::new(env, "user_whitelisted"), user.clone()),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(env, "user_whitelisted"), user.clone()), ());
     }
     Ok(())
 }
@@ -244,10 +240,7 @@ pub fn record_violation(
 
     #[allow(deprecated)]
     env.events().publish(
-        (
-            Symbol::new(env, "rate_limit_violation"),
-            user.clone(),
-        ),
+        (Symbol::new(env, "rate_limit_violation"), user.clone()),
         (violation_type, penalty_duration, history.violation_count),
     );
 
@@ -256,11 +249,7 @@ pub fn record_violation(
 
 // ─── Check ────────────────────────────────────────────────────────────────────
 
-pub fn check_rate_limits(
-    env: &Env,
-    user: &Address,
-    amount: i128,
-) -> Result<(), AutoTradeError> {
+pub fn check_rate_limits(env: &Env, user: &Address, amount: i128) -> Result<(), AutoTradeError> {
     if is_whitelisted(env, user) {
         return Ok(());
     }
@@ -338,7 +327,10 @@ pub fn record_transfer(env: &Env, user: &Address, amount: i128) {
 
     prune_old_records(env, &mut history, now);
 
-    let record = TransferRecord { timestamp: now, amount };
+    let record = TransferRecord {
+        timestamp: now,
+        amount,
+    };
     history.transfers_last_hour.push_back(record.clone());
     history.transfers_last_day.push_back(record);
     history.last_transfer_time = now;
@@ -360,14 +352,12 @@ pub fn adjust_limits_based_on_load(env: &Env) -> Result<(), AutoTradeError> {
 
     match load_pct {
         0..=50 => {
-            limits.per_user_hourly_transfers =
-                (limits.per_user_hourly_transfers + 1).min(20);
+            limits.per_user_hourly_transfers = (limits.per_user_hourly_transfers + 1).min(20);
         }
         80..=100 => {
             limits.per_user_hourly_transfers =
                 limits.per_user_hourly_transfers.saturating_sub(1).max(3);
-            limits.cooldown_between_transfers =
-                (limits.cooldown_between_transfers + 60).min(600);
+            limits.cooldown_between_transfers = (limits.cooldown_between_transfers + 60).min(600);
         }
         _ => {}
     }

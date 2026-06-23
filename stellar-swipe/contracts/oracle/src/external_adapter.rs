@@ -5,7 +5,10 @@ use crate::errors::OracleError;
 use crate::types::ExternalPrice;
 
 /// Aggregate external oracle reports (simplified average; signature verification is out of scope here).
-pub fn process_external_prices(env: &Env, prices: Vec<ExternalPrice>) -> Result<i128, OracleError> {
+pub fn process_external_prices(
+    _env: &Env,
+    prices: Vec<ExternalPrice>,
+) -> Result<i128, OracleError> {
     if prices.is_empty() {
         return Err(OracleError::InsufficientOracles);
     }

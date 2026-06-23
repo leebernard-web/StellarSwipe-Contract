@@ -10,7 +10,6 @@
 /// - post-failure state reset (new election can be started immediately)
 /// - finalization before deadline is rejected
 /// - successful election with all quorum params set
-
 extern crate std;
 
 use crate::committees::ElectionStatus;
@@ -47,6 +46,12 @@ fn client<'a>(env: &'a Env, contract_id: &'a Address) -> GovernanceContractClien
     GovernanceContractClient::new(env, contract_id)
 }
 
+fn fund_user(env: &Env, contract_id: &Address, user: &Address, amount: i128) {
+    env.as_contract(contract_id, || {
+        crate::add_balance(env, user, amount).unwrap();
+    });
+}
+
 fn initialize(
     client: &GovernanceContractClient<'_>,
     env: &Env,
@@ -64,11 +69,7 @@ fn initialize(
 }
 
 /// Create a minimal committee and return its id.
-fn create_test_committee(
-    client: &GovernanceContractClient<'_>,
-    env: &Env,
-    admin: &Address,
-) -> u64 {
+fn create_test_committee(client: &GovernanceContractClient<'_>, env: &Env, admin: &Address) -> u64 {
     let members: Vec<Address> = {
         let mut v = Vec::new(env);
         for _ in 0..5u32 {
@@ -175,11 +176,7 @@ fn reject_vote_for_unnominated_candidate() {
     // Nominate candidate_one but vote for an address that was never nominated
     let candidate_one = Address::generate(&env);
     let phantom_candidate = Address::generate(&env);
-    client.nominate_for_committee(
-        &committee_id,
-        &candidate_one,
-        &recipients.community_rewards,
-    );
+    client.nominate_for_committee(&committee_id, &candidate_one, &recipients.community_rewards);
 
     let result = client.try_vote_in_committee_election(
         &committee_id,
@@ -212,19 +209,12 @@ fn reject_vote_from_unstaked_voter() {
     client.start_committee_election(&admin, &committee_id, &3u32, &7u32, &0u32, &0i128);
 
     let candidate_one = Address::generate(&env);
-    client.nominate_for_committee(
-        &committee_id,
-        &candidate_one,
-        &recipients.community_rewards,
-    );
+    client.nominate_for_committee(&committee_id, &candidate_one, &recipients.community_rewards);
 
     // unstaked_voter has no staked balance at all
     let unstaked_voter = Address::generate(&env);
-    let result = client.try_vote_in_committee_election(
-        &committee_id,
-        &unstaked_voter,
-        &candidate_one,
-    );
+    let result =
+        client.try_vote_in_committee_election(&committee_id, &unstaked_voter, &candidate_one);
     assert_eq!(result, Err(Ok(GovernanceError::InvalidElectionVote)));
 
     let election = client.committee_election(&committee_id);
@@ -250,23 +240,11 @@ fn reject_duplicate_vote_in_election() {
 
     let candidate_one = Address::generate(&env);
     let candidate_two = Address::generate(&env);
-    client.nominate_for_committee(
-        &committee_id,
-        &candidate_one,
-        &recipients.community_rewards,
-    );
-    client.nominate_for_committee(
-        &committee_id,
-        &candidate_two,
-        &recipients.community_rewards,
-    );
+    client.nominate_for_committee(&committee_id, &candidate_one, &recipients.community_rewards);
+    client.nominate_for_committee(&committee_id, &candidate_two, &recipients.community_rewards);
 
     // First vote succeeds
-    client.vote_in_committee_election(
-        &committee_id,
-        &recipients.community_rewards,
-        &candidate_one,
-    );
+    client.vote_in_committee_election(&committee_id, &recipients.community_rewards, &candidate_one);
 
     // Second vote must be rejected
     let result = client.try_vote_in_committee_election(
@@ -361,14 +339,8 @@ fn election_fails_when_participation_quorum_not_met() {
     );
 
     // Election record must be cleared — a new election can start immediately
-    let new_election = client.start_committee_election(
-        &admin,
-        &committee_id,
-        &3u32,
-        &7u32,
-        &1u32,
-        &0i128,
-    );
+    let new_election =
+        client.start_committee_election(&admin, &committee_id, &3u32, &7u32, &1u32, &0i128);
     assert!(
         new_election.election_end > new_election.election_start,
         "new election should be schedulable after a failed one"
@@ -452,7 +424,7 @@ fn finalization_excludes_votes_from_voters_who_unstaked() {
         &committee_id,
         &3u32,
         &7u32,
-        &3u32,  // min_participation = 3; voter_b's vote becomes invalid post-unstake
+        &3u32, // min_participation = 3; voter_b's vote becomes invalid post-unstake
         &0i128,
     );
 
@@ -499,6 +471,7 @@ fn successful_election_with_quorum_checks_installs_winners() {
     client.stake(&recipients.community_rewards, &100_000_000);
     client.stake(&recipients.public_sale, &50_000_000);
     client.stake(&recipients.treasury, &30_000_000);
+    fund_user(&env, &contract_id, &recipients.team, 20_000_000);
     client.stake(&recipients.team, &20_000_000);
 
     let committee_id = create_test_committee(&client, &env, &admin);
@@ -507,7 +480,7 @@ fn successful_election_with_quorum_checks_installs_winners() {
         &committee_id,
         &3u32,
         &7u32,
-        &3u32,          // min_participation: need at least 3 voters
+        &3u32,           // min_participation: need at least 3 voters
         &50_000_000i128, // stake quorum: at least 50M staked weight
     );
 

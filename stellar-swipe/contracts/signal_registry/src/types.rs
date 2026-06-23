@@ -157,7 +157,6 @@ pub struct SignalEditInput {
     pub confidence: u32,
 }
 
-
 #[contracttype]
 #[derive(Clone, Debug, Default)]
 pub struct ProviderPerformance {

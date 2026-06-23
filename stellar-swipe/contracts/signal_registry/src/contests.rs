@@ -170,7 +170,6 @@ pub fn auto_enter_signal(env: &Env, signal: &Signal) -> Result<(), ContestError>
     Ok(())
 }
 
-
 /// Add this trade's ROI and volume to any active contest entry that lists `signal_id` for `provider`.
 pub fn apply_trade_to_contest_entries(
     env: &Env,

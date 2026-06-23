@@ -84,7 +84,9 @@ pub fn initialize_timelock(
     env.storage()
         .instance()
         .set(&StorageKey::TimelockState, &timelock);
-    env.storage().instance().set(&StorageKey::Guardian, &guardian);
+    env.storage()
+        .instance()
+        .set(&StorageKey::Guardian, &guardian);
 
     Ok(timelock)
 }
@@ -223,7 +225,9 @@ pub fn emergency_unblock_action(
                 return Err(GovernanceError::InvalidCommitteeAction);
             }
 
-            let stuck_since = action.execution_available.saturating_add(STUCK_GRACE_PERIOD);
+            let stuck_since = action
+                .execution_available
+                .saturating_add(STUCK_GRACE_PERIOD);
             if env.ledger().timestamp() < stuck_since {
                 return Err(GovernanceError::InvalidDuration);
             }
@@ -345,7 +349,8 @@ pub fn extend_execution_window(
             if action.executed || action.cancelled {
                 return Err(GovernanceError::InvalidCommitteeAction);
             }
-            action.execution_available = action.execution_available.saturating_add(extension_seconds);
+            action.execution_available =
+                action.execution_available.saturating_add(extension_seconds);
             let new_time = action.execution_available;
             timelock.queued_actions.set(i, action);
             put_timelock(env, &timelock);
@@ -396,7 +401,8 @@ pub fn generate_timelock_analytics(env: &Env) -> Result<TimelockAnalytics, Gover
 
         if action.executed {
             total_executed = total_executed.saturating_add(1);
-            total_wait = total_wait.saturating_add(action.execution_available.saturating_sub(action.queued_at));
+            total_wait = total_wait
+                .saturating_add(action.execution_available.saturating_sub(action.queued_at));
             wait_count = wait_count.saturating_add(1);
         }
         if action.cancelled {

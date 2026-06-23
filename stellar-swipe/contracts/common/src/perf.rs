@@ -35,7 +35,9 @@ pub enum PerfStorageKey {
 /// Read a value from the transaction-scoped cache, or compute and store it.
 pub fn tx_cache_or_compute<T, F>(env: &Env, key: Symbol, mut compute: F) -> T
 where
-    T: Clone + soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+    T: Clone
+        + soroban_sdk::IntoVal<Env, soroban_sdk::Val>
+        + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
     F: FnMut() -> T,
 {
     let cache_key = PerfStorageKey::TxCache(key);

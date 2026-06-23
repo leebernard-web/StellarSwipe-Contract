@@ -25,7 +25,7 @@ fn unstake_tokens_rejects_reentrant_call() {
     let provider = Address::generate(&env);
 
     // Stake enough to be eligible for unstaking.
-    client.stake_tokens(&provider, &100_000_000i128).unwrap();
+    client.stake_tokens(&provider, &100_000_000i128);
 
     // Simulate reentrancy: set the lock flag as if a reentrant call is in progress.
     let contract_id = client.address.clone();
@@ -46,7 +46,7 @@ fn unstake_tokens_rejects_reentrant_call() {
     });
 
     // After clearing the simulated lock, a legitimate unstake succeeds.
-    client.unstake_tokens(&provider).unwrap();
+    client.unstake_tokens(&provider);
 }
 
 /// Verify the lock is cleared after a successful unstake (no lock leak).
@@ -55,19 +55,18 @@ fn unstake_tokens_clears_lock_on_success() {
     let (env, _, client) = setup();
     let provider = Address::generate(&env);
 
-    client.stake_tokens(&provider, &100_000_000i128).unwrap();
-    client.unstake_tokens(&provider).unwrap();
+    client.stake_tokens(&provider, &100_000_000i128);
+    client.unstake_tokens(&provider);
 
     // Lock must not be set after a successful call.
     let contract_id = client.address.clone();
     env.as_contract(&contract_id, || {
         let lock_key = Symbol::new(&env, "UnstakeLock");
-        let locked: bool = env
-            .storage()
-            .temporary()
-            .get(&lock_key)
-            .unwrap_or(false);
-        assert!(!locked, "UnstakeLock was not cleared after successful unstake");
+        let locked: bool = env.storage().temporary().get(&lock_key).unwrap_or(false);
+        assert!(
+            !locked,
+            "UnstakeLock was not cleared after successful unstake"
+        );
     });
 }
 
@@ -85,11 +84,7 @@ fn unstake_tokens_clears_lock_on_error() {
     let contract_id = client.address.clone();
     env.as_contract(&contract_id, || {
         let lock_key = Symbol::new(&env, "UnstakeLock");
-        let locked: bool = env
-            .storage()
-            .temporary()
-            .get(&lock_key)
-            .unwrap_or(false);
+        let locked: bool = env.storage().temporary().get(&lock_key).unwrap_or(false);
         assert!(!locked, "UnstakeLock was not cleared after failed unstake");
     });
 }

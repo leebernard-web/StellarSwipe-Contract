@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, Implement_automated_market ]
   pull_request:
     branches: [ main ]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,8 +58,19 @@ jobs:
         run: cd stellar-swipe && cargo test --workspace --all-targets
 
       # Release WASM (workspace [profile.release]) + stellar contract optimize
+      # Prebuilt release binary — avoids compiling libdbus-sys from source via cargo install
       - name: Install Stellar CLI
-        run: cargo install stellar-cli --locked --version 25.2.0
+        run: |
+          set -euo pipefail
+          version="25.2.0"
+          install_dir="$HOME/.local/bin"
+          mkdir -p "$install_dir"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          curl -fL \
+            "https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-${version}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C "$install_dir"
+          chmod +x "$install_dir/stellar"
+          stellar --version
 
       - name: Build optimized Soroban WASM
         run: cd stellar-swipe && chmod +x scripts/build.sh && ./scripts/build.sh

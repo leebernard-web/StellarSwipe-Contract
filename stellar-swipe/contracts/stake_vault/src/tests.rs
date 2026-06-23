@@ -5,10 +5,8 @@ use crate::{
     StakeVaultContract, StakeVaultContractClient, StakeVaultError,
 };
 use soroban_sdk::{
-    contract, contractimpl,
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env, Map, MuxedAddress, Symbol,
+    contract, contractimpl, testutils::Address as _, token::StellarAssetClient, Address, Env, Map,
+    MuxedAddress, Symbol,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -18,7 +16,13 @@ fn sac_token(env: &Env, admin: &Address) -> Address {
         .address()
 }
 
-fn seed_v2_stake(env: &Env, contract_id: &Address, staker: &Address, balance: i128, locked_until: u64) {
+fn seed_v2_stake(
+    env: &Env,
+    contract_id: &Address,
+    staker: &Address,
+    balance: i128,
+    locked_until: u64,
+) {
     env.as_contract(contract_id, || {
         let mut stakes: Map<Address, StakeInfoV2> = env
             .storage()
@@ -27,9 +31,15 @@ fn seed_v2_stake(env: &Env, contract_id: &Address, staker: &Address, balance: i1
             .unwrap_or_else(|| Map::new(env));
         stakes.set(
             staker.clone(),
-            StakeInfoV2 { balance, locked_until, last_updated: env.ledger().timestamp() },
+            StakeInfoV2 {
+                balance,
+                locked_until,
+                last_updated: env.ledger().timestamp(),
+            },
         );
-        env.storage().persistent().set(&MigrationKey::StakesV2, &stakes);
+        env.storage()
+            .persistent()
+            .set(&MigrationKey::StakesV2, &stakes);
     });
 }
 
@@ -91,32 +101,73 @@ pub struct ReentrantToken;
 #[contractimpl]
 impl ReentrantToken {
     pub fn set_vault(env: Env, vault: Address) {
-        env.storage().instance().set(&soroban_sdk::symbol_short!("vault"), &vault);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("vault"), &vault);
     }
     pub fn set_staker(env: Env, staker: Address) {
-        env.storage().instance().set(&soroban_sdk::symbol_short!("staker"), &staker);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("staker"), &staker);
     }
     /// Attempt reentrancy on every transfer call.
     pub fn transfer(env: Env, _from: Address, _to: MuxedAddress, _amount: i128) {
-        let vault: Address = env.storage().instance().get(&soroban_sdk::symbol_short!("vault")).unwrap();
-        let staker: Address = env.storage().instance().get(&soroban_sdk::symbol_short!("staker")).unwrap();
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("vault"))
+            .unwrap();
+        let staker: Address = env
+            .storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("staker"))
+            .unwrap();
         let result = StakeVaultContractClient::new(&env, &vault).try_withdraw_stake(&staker);
         let blocked = matches!(result, Err(Ok(StakeVaultError::ReentrancyDetected)));
         // Only write true; don't overwrite a previously set true with false.
         if blocked {
-            env.storage().instance().set(&soroban_sdk::symbol_short!("blocked"), &true);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("blocked"), &true);
         }
     }
     pub fn was_blocked(env: Env) -> bool {
-        env.storage().instance().get(&soroban_sdk::symbol_short!("blocked")).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("blocked"))
+            .unwrap_or(false)
     }
-    pub fn balance(_env: Env, _id: Address) -> i128 { 0 }
-    pub fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {}
-    pub fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {}
-    pub fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 { 0 }
-    pub fn decimals(_env: Env) -> u32 { 7 }
-    pub fn name(env: Env) -> soroban_sdk::String { soroban_sdk::String::from_str(&env, "ReentrantToken") }
-    pub fn symbol(env: Env) -> soroban_sdk::String { soroban_sdk::String::from_str(&env, "RT") }
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        0
+    }
+    pub fn transfer_from(
+        _env: Env,
+        _spender: Address,
+        _from: Address,
+        _to: Address,
+        _amount: i128,
+    ) {
+    }
+    pub fn approve(
+        _env: Env,
+        _from: Address,
+        _spender: Address,
+        _amount: i128,
+        _expiration_ledger: u32,
+    ) {
+    }
+    pub fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
+        0
+    }
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
+    pub fn name(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "ReentrantToken")
+    }
+    pub fn symbol(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, "RT")
+    }
     pub fn mint(_env: Env, _to: Address, _amount: i128) {}
 }
 
@@ -173,7 +224,10 @@ fn lock_cleared_after_failed_withdrawal() {
             .get::<_, bool>(&Symbol::new(&env, "WithdrawLock"))
             .unwrap_or(false)
     });
-    assert!(!lock_still_set, "lock was not cleared after failed withdrawal");
+    assert!(
+        !lock_still_set,
+        "lock was not cleared after failed withdrawal"
+    );
 }
 
 // ── slash_stake tests ────────────────────────────────────────────────────────
@@ -187,9 +241,16 @@ fn slash_stake_emits_event() {
     StellarAssetClient::new(&env, &token).mint(&vault_id, &amount);
     seed_v2_stake(&env, &vault_id, &provider, amount, 0);
     let events_before = env.events().all().len();
-    StakeVaultContractClient::new(&env, &vault_id)
-        .slash_stake(&signal_registry, &provider, &amount, &Symbol::new(&env, "ban"));
-    assert!(env.events().all().len() > events_before, "stake_slashed event not emitted");
+    StakeVaultContractClient::new(&env, &vault_id).slash_stake(
+        &signal_registry,
+        &provider,
+        &amount,
+        &Symbol::new(&env, "ban"),
+    );
+    assert!(
+        env.events().all().len() > events_before,
+        "stake_slashed event not emitted"
+    );
 }
 
 #[test]
@@ -201,7 +262,12 @@ fn slash_stake_reduces_provider_balance() {
     StellarAssetClient::new(&env, &token).mint(&vault_id, &initial);
     seed_v2_stake(&env, &vault_id, &provider, initial, 0);
     let client = StakeVaultContractClient::new(&env, &vault_id);
-    client.slash_stake(&signal_registry, &provider, &slash_amount, &Symbol::new(&env, "fraud"));
+    client.slash_stake(
+        &signal_registry,
+        &provider,
+        &slash_amount,
+        &Symbol::new(&env, "fraud"),
+    );
     assert_eq!(client.get_stake(&provider), initial - slash_amount);
 }
 
@@ -216,8 +282,12 @@ fn slash_stake_burns_tokens_from_vault() {
     seed_v2_stake(&env, &vault_id, &provider, initial, 0);
     let token_client = token::Client::new(&env, &token_addr);
     let balance_before = token_client.balance(&vault_id);
-    StakeVaultContractClient::new(&env, &vault_id)
-        .slash_stake(&signal_registry, &provider, &slash_amount, &Symbol::new(&env, "misconduct"));
+    StakeVaultContractClient::new(&env, &vault_id).slash_stake(
+        &signal_registry,
+        &provider,
+        &slash_amount,
+        &Symbol::new(&env, "misconduct"),
+    );
     assert_eq!(
         token_client.balance(&vault_id),
         balance_before - slash_amount,
@@ -233,8 +303,12 @@ fn slash_stake_unauthorized_caller_rejected() {
     let amount: i128 = 500_000;
     StellarAssetClient::new(&env, &token).mint(&vault_id, &amount);
     seed_v2_stake(&env, &vault_id, &provider, amount, 0);
-    let result = StakeVaultContractClient::new(&env, &vault_id)
-        .try_slash_stake(&unauthorized, &provider, &amount, &Symbol::new(&env, "ban"));
+    let result = StakeVaultContractClient::new(&env, &vault_id).try_slash_stake(
+        &unauthorized,
+        &provider,
+        &amount,
+        &Symbol::new(&env, "ban"),
+    );
     assert_eq!(result, Err(Ok(StakeVaultError::Unauthorized)));
 }
 
@@ -264,7 +338,10 @@ fn notify_stake_below_minimum_emits_event() {
     client.set_minimum_stake(&500_000i128);
     let events_before = env.events().all().len();
     client.notify_stake_below_minimum(&provider);
-    assert!(env.events().all().len() > events_before, "event not emitted");
+    assert!(
+        env.events().all().len() > events_before,
+        "event not emitted"
+    );
 }
 
 #[test]
@@ -412,7 +489,10 @@ fn small_withdrawal_no_timelock_needed() {
 
     StellarAssetClient::new(&env, &token).mint(&vault_id, &amount);
     seed_v2_stake(&env, &vault_id, &staker, amount, 0);
-    assert_eq!(StakeVaultContractClient::new(&env, &vault_id).withdraw_stake(&staker), amount);
+    assert_eq!(
+        StakeVaultContractClient::new(&env, &vault_id).withdraw_stake(&staker),
+        amount
+    );
 }
 
 /// Admin pause blocks both deposit_stake and withdraw_stake.
@@ -429,8 +509,14 @@ fn paused_contract_blocks_stake_and_unstake() {
     let client = StakeVaultContractClient::new(&env, &vault_id);
     client.pause();
 
-    assert_eq!(client.try_deposit_stake(&staker, &amount), Err(Ok(StakeVaultError::ContractPaused)));
-    assert_eq!(client.try_withdraw_stake(&staker), Err(Ok(StakeVaultError::ContractPaused)));
+    assert_eq!(
+        client.try_deposit_stake(&staker, &amount),
+        Err(Ok(StakeVaultError::ContractPaused))
+    );
+    assert_eq!(
+        client.try_withdraw_stake(&staker),
+        Err(Ok(StakeVaultError::ContractPaused))
+    );
 }
 
 /// Unpause restores normal operation.
@@ -493,5 +579,8 @@ fn timelock_request_consumed_after_withdrawal() {
 
     // Re-seed for a second attempt — must require a fresh request.
     seed_v2_stake(&env, &vault_id, &staker, amount, 0);
-    assert_eq!(client.try_withdraw_stake(&staker), Err(Ok(StakeVaultError::TimelockRequired)));
+    assert_eq!(
+        client.try_withdraw_stake(&staker),
+        Err(Ok(StakeVaultError::TimelockRequired))
+    );
 }

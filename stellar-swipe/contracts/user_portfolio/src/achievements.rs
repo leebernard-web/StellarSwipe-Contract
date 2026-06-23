@@ -111,7 +111,12 @@ fn save_achievements(env: &Env, user: &Address, list: &Vec<Achievement>) {
 
 /// Increment progress for a specific achievement type by `delta`.
 /// Emits `AchievementCompleted` the first time the target is reached.
-pub fn increment_progress(env: &Env, user: &Address, achievement_type: AchievementType, delta: u32) {
+pub fn increment_progress(
+    env: &Env,
+    user: &Address,
+    achievement_type: AchievementType,
+    delta: u32,
+) {
     let mut list = get_achievements(env, user);
     for i in 0..list.len() {
         let mut a = list.get_unchecked(i);

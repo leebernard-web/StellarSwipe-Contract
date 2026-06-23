@@ -1,5 +1,5 @@
-use soroban_sdk::{contractevent, Address, Env, Symbol, String};
 use shared::errors::{ErrorCategory, RecoveryStrategy};
+use soroban_sdk::{contractevent, Address, Env, String, Symbol};
 
 #[contractevent]
 pub struct WithdrawalQueued {
@@ -138,12 +138,7 @@ pub fn emit_treasury_withdrawal(env: &Env, evt: EvtTreasuryWithdrawal) {
             Symbol::new(env, "fee_collector"),
             Symbol::new(env, "treasury_withdrawal"),
         ),
-        (
-            evt.recipient,
-            evt.token,
-            evt.amount,
-            evt.remaining_balance,
-        ),
+        (evt.recipient, evt.token, evt.amount, evt.remaining_balance),
     );
 }
 

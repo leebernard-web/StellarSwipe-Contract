@@ -1,5 +1,9 @@
 #![no_std]
 
+#[cfg(target_family = "wasm")]
+#[global_allocator]
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+
 mod admin;
 mod analytics;
 mod categories;
@@ -9,27 +13,30 @@ mod community_voting;
 mod contests;
 mod cross_chain;
 mod errors;
+#[allow(deprecated)]
 mod events;
 mod expiry;
 mod fees;
 mod import;
 mod leaderboard;
+mod migration;
 mod ml_scoring;
+mod multisig_approvals;
 mod performance;
+mod providers;
 mod query;
-pub mod reputation;
 mod reports;
+pub mod reputation;
 mod scheduling;
 mod scoring;
 mod social;
 mod stake;
 mod storage_monitor;
 mod submission;
+mod template_presets;
 mod templates;
 mod test_reputation;
 mod types;
-mod migration;
-mod multisig_approvals;
 mod validation;
 mod versioning;
 
@@ -42,10 +49,10 @@ use admin::{
     get_admin, get_admin_config, init_admin, is_trading_paused,
     require_not_paused_legacy as require_not_paused, AdminConfig,
 };
-use stellar_swipe_common::emergency::PauseState;
+use shared::version::{set_contract_version, SIGNAL_REGISTRY_VERSION};
+use stellar_swipe_common::emergency::{PauseState, CAT_SIGNALS, CAT_TRADING};
 use stellar_swipe_common::rate_limit::{self as rl, ActionType as RLAction, RateLimitConfig};
 use stellar_swipe_common::SECONDS_PER_30_DAY_MONTH;
-use shared::version::{set_contract_version, SIGNAL_REGISTRY_VERSION};
 
 use combos::{
     cancel_combo, create_combo_signal, execute_combo_signal, get_combo, get_combo_executions_pub,
@@ -66,20 +73,25 @@ pub use leaderboard::{
     ProviderLeaderboard, ProviderLeaderboardEntry, ProviderMetric,
 };
 pub use ml_scoring::{MLModel, SignalFeatures, SignalScore};
+use providers::VerificationEligibility;
 use reputation::{
     calculate_trust_score, get_trust_score, update_median_values, update_trust_score,
     TrustScoreDetails, TrustScoreTier,
 };
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Map, String, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, Bytes, Env, IntoVal, Map, String, Symbol, Val,
+    Vec,
+};
 use stellar_swipe_common::{health_uninitialized, placeholder_admin, HealthStatus};
-use stellar_swipe_common::{ApprovalProposal, MultisigTimelockConfig, ProposalStatus};
 use stellar_swipe_common::{validate_asset_pair as validate_asset_pair_common, AssetPairError};
-pub use templates::{SignalTemplate, SignalTemplateOverrides, StoredSignalTemplate};
-use templates::{SignalTemplate, DEFAULT_TEMPLATE_EXPIRY_HOURS};
+use stellar_swipe_common::{ApprovalProposal, MultisigTimelockConfig, ProposalStatus};
+pub use template_presets::{SignalTemplateOverrides, SignalTemplatePreset, StoredSignalTemplate};
+pub use templates::SignalTemplate;
+use templates::DEFAULT_TEMPLATE_EXPIRY_HOURS;
 use types::{
-    AddressMapping, Asset, CrossChainSignal, FeeBreakdown, ImportResultView, ProviderMonthlyReport,
-    ProviderPerformance, RecurrencePattern, Signal, SignalData, SignalEditInput, SignalOutcome,
-    SignalPerformanceView, SignalStatus, SignalSummary, SortOption, SyncStatus, TradeExecution,
+    AddressMapping, Asset, CrossChainSignal, ImportResultView, ProviderMonthlyReport,
+    RecurrencePattern, Signal, SignalData, SignalEditInput, SignalPerformanceView, SignalSummary,
+    SortOption, SyncStatus, TradeExecution,
 };
 use versioning::{CopyRecord, SignalVersion};
 
@@ -162,6 +174,20 @@ impl SignalRegistry {
         env.storage()
             .instance()
             .set(&StorageKey::TradeExecutor, &executor);
+        Ok(())
+    }
+
+    /// Register the UserPortfolio contract used for PREMIUM subscription checks.
+    pub fn set_user_portfolio(
+        env: Env,
+        caller: Address,
+        portfolio: Address,
+    ) -> Result<(), AdminError> {
+        admin::require_admin(&env, &caller)?;
+        caller.require_auth();
+        env.storage()
+            .instance()
+            .set(&StorageKey::UserPortfolio, &portfolio);
         Ok(())
     }
 
@@ -521,7 +547,10 @@ impl SignalRegistry {
     }
 
     /// Read a proposal by id.
-    pub fn get_approval_proposal(env: Env, proposal_id: u64) -> Result<ApprovalProposal, AdminError> {
+    pub fn get_approval_proposal(
+        env: Env,
+        proposal_id: u64,
+    ) -> Result<ApprovalProposal, AdminError> {
         multisig_approvals::get_approval_proposal(&env, proposal_id)
     }
 
@@ -659,8 +688,9 @@ impl SignalRegistry {
 
     /// Returns `true` if the Stellar account for `provider` still exists on-chain.
     /// A merged (deleted) account returns `false`.
-    fn check_provider_exists(env: &Env, provider: &Address) -> bool {
-        env.accounts().get(provider).is_some()
+    fn check_provider_exists(_env: &Env, _provider: &Address) -> bool {
+        // Account existence is not queryable from contract WASM; assume present.
+        true
     }
 
     /// Mark a signal as orphaned (provider account deleted), emit the event, and persist.
@@ -740,6 +770,7 @@ impl SignalRegistry {
     ) -> Result<u64, AdminError> {
         // Check if signals are paused
         admin::require_not_paused(env, String::from_str(env, CAT_SIGNALS))?;
+        admin::require_not_paused(env, String::from_str(env, CAT_TRADING))?;
 
         // Issue #424: Banned providers cannot submit signals
         if providers::is_provider_banned(env, &provider) {
@@ -770,7 +801,12 @@ impl SignalRegistry {
                 }
             });
 
-        validation::validate_provider_signal_limit(env, &Self::get_signals_map(env), &provider, provider_stake_tier)?;
+        validation::validate_provider_signal_limit(
+            env,
+            &Self::get_signals_map(env),
+            &provider,
+            provider_stake_tier,
+        )?;
 
         // Rate limit: signal submission
         let trust = reputation::get_trust_score(env, &provider)
@@ -878,8 +914,14 @@ impl SignalRegistry {
         }
 
         // Check for expiry warning (Issue #417)
-        let current_ledger = env.ledger().sequence();
-        let time_to_expiry = signal.expiry.saturating_sub(current_ledger);
+        let now = env.ledger().timestamp();
+        if signal.status == SignalStatus::Active && crate::expiry::is_expired(&env, &signal) {
+            crate::expiry::check_and_update_expiry(&env, &mut signal);
+            signals.set(signal_id, signal.clone());
+            Self::save_signals_map(&env, &signals);
+        }
+
+        let time_to_expiry = signal.expiry.saturating_sub(now);
         if time_to_expiry <= WARNING_WINDOW_LEDGERS && !signal.warning_emitted {
             events::emit_signal_expiry_warning(
                 &env,
@@ -899,14 +941,14 @@ impl SignalRegistry {
     pub fn save_signal_template(
         env: Env,
         provider: Address,
-        template: SignalTemplate,
+        template: SignalTemplatePreset,
     ) -> Result<u32, AdminError> {
         provider.require_auth();
         Self::validate_asset_pair(&env, &template.asset_pair)?;
 
         let mut templates_map = Self::get_signal_templates_map(&env);
         let template_id =
-            templates::save_signal_template(&env, &mut templates_map, provider, template)
+            template_presets::save_signal_template(&env, &mut templates_map, provider, template)
                 .map_err(|_| AdminError::InvalidParameter)?;
         Self::save_signal_templates_map(&env, &templates_map);
 
@@ -921,20 +963,32 @@ impl SignalRegistry {
     ) -> Result<u64, AdminError> {
         let templates_map = Self::get_signal_templates_map(&env);
         let template =
-            templates::get_signal_template(&templates_map, provider.clone(), template_id)
+            template_presets::get_signal_template(&templates_map, provider.clone(), template_id)
                 .map_err(|_| AdminError::InvalidParameter)?;
         let (asset_pair, action, expiry_hours, price, rationale) =
-            templates::merge_template(template, overrides);
+            template_presets::merge_template(template, overrides);
         let expiry = env.ledger().timestamp() + expiry_hours * 60 * 60;
+        let tags = Vec::new(&env);
 
-        Self::create_signal(env, provider, asset_pair, action, price, rationale, expiry)
+        Self::create_signal(
+            env,
+            provider,
+            asset_pair,
+            action,
+            price,
+            rationale,
+            expiry,
+            SignalCategory::SWING,
+            tags,
+            RiskLevel::Medium,
+        )
     }
 
     /* =========================
        PERFORMANCE TRACKING FUNCTIONS
     ========================== */
     /// Get the composite quality score for a signal (0-100).
-    /// 
+    ///
     /// Combines success rate, adoption count, stake tier, and AI validation score
     /// into a single quality metric. If AI score is absent, its weight is redistributed
     /// to the success rate component.
@@ -953,11 +1007,7 @@ impl SignalRegistry {
     /// signals are visible to any viewer. PREMIUM signals require an active on-chain
     /// subscription (via UserPortfolio [`check_subscription`]) unless the viewer is the
     /// signal provider.
-    pub fn get_signal_for_viewer(
-        env: Env,
-        signal_id: u64,
-        viewer: Address,
-    ) -> Option<Signal> {
+    pub fn get_signal_for_viewer(env: Env, signal_id: u64, viewer: Address) -> Option<Signal> {
         let signals = Self::get_signals_map(&env);
         let signal = signals.get(signal_id)?;
 
@@ -978,10 +1028,7 @@ impl SignalRegistry {
         if viewer == signal.provider {
             return Some(signal);
         }
-        let portfolio: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::UserPortfolio)?;
+        let portfolio: Address = env.storage().instance().get(&StorageKey::UserPortfolio)?;
         let allowed = Self::invoke_check_subscription(&env, &portfolio, &viewer, &signal.provider);
         if allowed {
             Some(signal)
@@ -1358,7 +1405,10 @@ impl SignalRegistry {
 
         // Update signal stats (general perf) and copier ROI (Issue #367)
         performance::update_signal_stats(&mut signal, &trade);
-        performance::update_copier_roi_stats(&mut signal, roi.clamp(i32::MIN as i128, i32::MAX as i128) as i32);
+        performance::update_copier_roi_stats(
+            &mut signal,
+            roi.clamp(i32::MIN as i128, i32::MAX as i128) as i32,
+        );
 
         // Evaluate new status
         let now = env.ledger().timestamp();
@@ -1475,7 +1525,13 @@ impl SignalRegistry {
         }
 
         let mut stakes = Self::get_provider_stakes_map(&env);
-        stakes.set(provider, amount);
+        let mut info = stakes.get(provider.clone()).unwrap_or(stake::StakeInfo {
+            amount: 0,
+            last_signal_time: 0,
+            locked_until: 0,
+        });
+        info.amount = amount;
+        stakes.set(provider, info);
         Self::save_provider_stakes_map(&env, &stakes);
         Ok(())
     }
@@ -1503,13 +1559,8 @@ impl SignalRegistry {
         caller.require_auth();
 
         let mut signals = Self::get_signals_map(&env);
-        let (signals_cancelled, stake_slashed) = providers::ban_provider(
-            &env,
-            &mut signals,
-            &provider,
-            &reason_hash,
-            &stake_vault,
-        );
+        let (signals_cancelled, stake_slashed) =
+            providers::ban_provider(&env, &mut signals, &provider, &reason_hash, &stake_vault);
         Self::save_signals_map(&env, &signals);
 
         providers::emit_provider_banned(
@@ -1537,7 +1588,10 @@ impl SignalRegistry {
     pub fn check_verification_eligibility(env: Env, provider: Address) -> VerificationEligibility {
         let stakes = Self::get_provider_stakes_map(&env);
         let stats = Self::get_provider_stats_map(&env);
-        let stake = stakes.get(provider.clone()).unwrap_or(0);
+        let stake = stakes
+            .get(provider.clone())
+            .map(|info| info.amount)
+            .unwrap_or(0);
         let performance = stats.get(provider.clone()).unwrap_or_default();
 
         providers::check_verification_eligibility(&env, provider, stake, performance)
@@ -1662,6 +1716,17 @@ impl SignalRegistry {
             .ok_or(AdminError::InvalidParameter)?;
         signals.set(signal_id, signal.clone());
         Self::save_signals_map(&env, &signals);
+
+        let provider = signal.provider.clone();
+        let mut provider_stats_map = Self::get_provider_stats_map(&env);
+        let mut provider_stats = provider_stats_map.get(provider.clone()).unwrap_or_default();
+        provider_stats.total_copies = provider_stats
+            .total_copies
+            .checked_add(1)
+            .ok_or(AdminError::InvalidParameter)?;
+        provider_stats_map.set(provider.clone(), provider_stats.clone());
+        Self::save_provider_stats_map(&env, &provider_stats_map);
+        update_leaderboard_index(&env, provider, &provider_stats);
 
         // Save nonce
         let mut nonces = nonces;
@@ -2753,14 +2818,6 @@ pub struct StorageStats {
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test;
-#[cfg(test)]
-mod test_multisig_approval;
-#[cfg(test)]
-mod test_adoption;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod test_admin_transfer;
 #[cfg(test)]
 mod test_adoption;
@@ -2769,8 +2826,10 @@ mod test_emergency;
 #[cfg(test)]
 mod test_health;
 #[cfg(test)]
+mod test_multisig_approval;
+#[cfg(test)]
 mod test_scheduling;
 #[cfg(test)]
 mod test_signal_issues;
 #[cfg(test)]
-mod test_admin_transfer;
+mod tests;

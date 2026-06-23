@@ -52,8 +52,7 @@ pub fn check_liquidity(
     entry_price: i128,
     max_slippage_bps: u32,
 ) -> Result<(), ContractError> {
-    let (_best_ask_price, available_qty) =
-        query_best_ask(env, sdex_router, from_token, to_token);
+    let (_best_ask_price, available_qty) = query_best_ask(env, sdex_router, from_token, to_token);
 
     if available_qty == 0 || available_qty < required_amount {
         return Err(ContractError::InsufficientLiquidity);
@@ -61,7 +60,11 @@ pub fn check_liquidity(
 
     // Price guard: best_ask > entry_price * (1 + max_slippage_bps / 10_000)
     let threshold = entry_price
-        .checked_mul((10_000i128).checked_add(max_slippage_bps as i128).unwrap_or(i128::MAX))
+        .checked_mul(
+            (10_000i128)
+                .checked_add(max_slippage_bps as i128)
+                .unwrap_or(i128::MAX),
+        )
         .unwrap_or(i128::MAX)
         / 10_000;
 

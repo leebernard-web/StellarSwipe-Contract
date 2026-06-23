@@ -10,7 +10,7 @@
 //! per-callee-kind: each contract kind declares a minimum acceptable callee
 //! version in [`min_version_for`].
 
-use soroban_sdk::{contracterror, contracttype, symbol_short, Env, panic_with_error};
+use soroban_sdk::{contracterror, contracttype, panic_with_error, symbol_short, Env};
 
 // ── Per-contract version constants ───────────────────────────────────────────
 
@@ -100,10 +100,8 @@ pub fn require_compatible(env: &Env, callee_version: u32, kind: ContractKind) {
 
 /// Convenience: emit a version-check event for observability.
 pub fn emit_version_checked(env: &Env, callee_version: u32, compatible: bool) {
-    env.events().publish(
-        (symbol_short!("ver_chk"), callee_version),
-        compatible,
-    );
+    env.events()
+        .publish((symbol_short!("ver_chk"), callee_version), compatible);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

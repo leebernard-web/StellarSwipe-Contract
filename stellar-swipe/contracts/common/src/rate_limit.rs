@@ -22,6 +22,11 @@ const MAX_STORED_TIMESTAMPS: u32 = 100;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateLimitError {
+    Exceeded,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionType {
@@ -183,14 +188,14 @@ fn effective_max(config: &RateLimitConfig, first_action: u64, now: u64, trust_sc
 // ── Core API ─────────────────────────────────────────────────────────────────
 
 /// Check whether `user` may perform `action`.
-/// Returns `Err(())` when the rate limit is exceeded and emits a `rate_limit_hit` event.
+/// Returns `Err(RateLimitError::Exceeded)` when the rate limit is exceeded and emits a `rate_limit_hit` event.
 /// `trust_score`: caller should pass the user's current trust score (0-100).
 pub fn check_rate_limit(
     env: &Env,
     user: &Address,
     action: ActionType,
     trust_score: u32,
-) -> Result<(), ()> {
+) -> Result<(), RateLimitError> {
     let now = env.ledger().timestamp();
     let config = get_config(env, &action);
     let first_action = get_first_action(env, user);
@@ -201,7 +206,7 @@ pub fn check_rate_limit(
 
     if recent_count >= max {
         emit_rate_limit_hit(env, user.clone(), action, recent_count, max);
-        return Err(());
+        return Err(RateLimitError::Exceeded);
     }
 
     Ok(())

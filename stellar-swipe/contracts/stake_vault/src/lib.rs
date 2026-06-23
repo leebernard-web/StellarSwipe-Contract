@@ -3,7 +3,9 @@
 pub mod migration;
 
 use migration::{MigrationKey, StakeInfoV2};
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
+};
 
 /// Temporary-storage key for the reentrancy lock on `withdraw_stake`.
 const EXECUTION_LOCK: &str = "WithdrawLock";
@@ -51,6 +53,7 @@ fn emit_provider_tier_change(
         "provider_tier_downgraded"
     };
 
+    #[allow(deprecated)]
     env.events().publish(
         (Symbol::new(env, topic),),
         (provider.clone(), old_tier, new_tier, stake_balance),
@@ -81,17 +84,17 @@ pub enum StorageKey {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum StakeVaultError {
-    NotInitialized    = 1,
-    Unauthorized      = 2,
-    NoStake           = 3,
-    StakeLocked       = 4,
+    NotInitialized = 1,
+    Unauthorized = 2,
+    NoStake = 3,
+    StakeLocked = 4,
     ReentrancyDetected = 5,
     /// Provider stake is below minimum and grace period has expired.
     StakeBelowMinimum = 6,
     /// Contract is paused due to suspicious activity or admin action.
-    ContractPaused    = 7,
+    ContractPaused = 7,
     /// Large withdrawal requires a pending time-lock request first.
-    TimelockRequired  = 8,
+    TimelockRequired = 8,
     /// Time-lock period has not yet elapsed.
     TimelockNotElapsed = 9,
     /// Stake and unstake in the same ledger — flash loan pattern detected.
@@ -109,8 +112,12 @@ impl StakeVaultContract {
             panic!("already initialized");
         }
         env.storage().instance().set(&StorageKey::Admin, &admin);
-        env.storage().instance().set(&StorageKey::StakeToken, &stake_token);
-        env.storage().instance().set(&StorageKey::SignalRegistry, &signal_registry);
+        env.storage()
+            .instance()
+            .set(&StorageKey::StakeToken, &stake_token);
+        env.storage()
+            .instance()
+            .set(&StorageKey::SignalRegistry, &signal_registry);
         env.storage().instance().set(&StorageKey::Paused, &false);
     }
 
@@ -125,8 +132,12 @@ impl StakeVaultContract {
             .expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Paused, &true);
+        #[allow(deprecated)]
         env.events().publish(
-            (Symbol::new(&env, "stake_vault"), Symbol::new(&env, "paused")),
+            (
+                Symbol::new(&env, "stake_vault"),
+                Symbol::new(&env, "paused"),
+            ),
             (),
         );
     }
@@ -140,8 +151,12 @@ impl StakeVaultContract {
             .expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Paused, &false);
+        #[allow(deprecated)]
         env.events().publish(
-            (Symbol::new(&env, "stake_vault"), Symbol::new(&env, "unpaused")),
+            (
+                Symbol::new(&env, "stake_vault"),
+                Symbol::new(&env, "unpaused"),
+            ),
             (),
         );
     }
@@ -225,11 +240,7 @@ impl StakeVaultContract {
         emit_provider_tier_change(&env, &staker, old_tier, new_tier, new_balance);
 
         // Transfer tokens into the vault (after state update — CEI pattern).
-        token::Client::new(&env, &token).transfer(
-            &staker,
-            &env.current_contract_address(),
-            &amount,
-        );
+        token::Client::new(&env, &token).transfer(&staker, env.current_contract_address(), &amount);
 
         Ok(())
     }
@@ -273,6 +284,7 @@ impl StakeVaultContract {
             let now = env.ledger().timestamp();
             env.storage().persistent().set(&key, &now);
 
+            #[allow(deprecated)]
             env.events().publish(
                 (
                     Symbol::new(&env, "stake_vault"),
@@ -339,10 +351,12 @@ impl StakeVaultContract {
         }
 
         let now = env.ledger().timestamp();
-        env.storage()
-            .persistent()
-            .set(&StorageKey::LargeWithdrawalRequestedAt(staker.clone()), &now);
+        env.storage().persistent().set(
+            &StorageKey::LargeWithdrawalRequestedAt(staker.clone()),
+            &now,
+        );
 
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),
@@ -404,9 +418,7 @@ impl StakeVaultContract {
             .get(&MigrationKey::StakesV2)
             .unwrap_or_else(|| soroban_sdk::Map::new(env));
 
-        let info = stakes
-            .get(staker.clone())
-            .ok_or(StakeVaultError::NoStake)?;
+        let info = stakes.get(staker.clone()).ok_or(StakeVaultError::NoStake)?;
 
         if info.balance == 0 {
             return Err(StakeVaultError::NoStake);
@@ -426,6 +438,7 @@ impl StakeVaultContract {
             .unwrap_or(0);
         if last_stake_ledger == current_ledger && current_ledger != 0 {
             // Emit alert event for monitoring system.
+            #[allow(deprecated)]
             env.events().publish(
                 (
                     Symbol::new(env, "stake_vault"),
@@ -474,11 +487,7 @@ impl StakeVaultContract {
         emit_provider_tier_change(env, staker, old_tier, new_tier, 0);
 
         // Cross-contract call: transfer tokens back to staker.
-        token::Client::new(env, &token).transfer(
-            &env.current_contract_address(),
-            staker,
-            &amount,
-        );
+        token::Client::new(env, &token).transfer(&env.current_contract_address(), staker, &amount);
 
         Ok(amount)
     }
@@ -514,7 +523,9 @@ impl StakeVaultContract {
             .get(&MigrationKey::StakesV2)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
-        let mut info = stakes.get(provider.clone()).ok_or(StakeVaultError::NoStake)?;
+        let mut info = stakes
+            .get(provider.clone())
+            .ok_or(StakeVaultError::NoStake)?;
 
         if amount <= 0 || amount > info.balance {
             return Err(StakeVaultError::NoStake);
@@ -530,6 +541,7 @@ impl StakeVaultContract {
             .persistent()
             .set(&MigrationKey::StakesV2, &stakes);
 
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),

@@ -80,11 +80,7 @@ pub fn execute_dca_copy_trade(
     }
 
     // Reject if a plan already exists.
-    if env
-        .storage()
-        .persistent()
-        .has(&plan_key(user, signal_id))
-    {
+    if env.storage().persistent().has(&plan_key(user, signal_id)) {
         return Err(ContractError::DCAPlanAlreadyExists);
     }
 
@@ -196,11 +192,7 @@ where
 }
 
 /// Manually cancel a DCA plan. Only the plan owner may cancel.
-pub fn cancel_dca_plan(
-    env: &Env,
-    user: &Address,
-    signal_id: u64,
-) -> Result<(), ContractError> {
+pub fn cancel_dca_plan(env: &Env, user: &Address, signal_id: u64) -> Result<(), ContractError> {
     let plan = load_plan(env, user, signal_id)?;
     let intervals_completed = plan.total_intervals - plan.remaining_intervals;
     remove_plan(env, user, signal_id);

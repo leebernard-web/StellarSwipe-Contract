@@ -226,8 +226,12 @@ pub fn get_leaderboard(
     limit: u32,
 ) -> Vec<ProviderLeaderboardEntry> {
     match metric {
-        LeaderboardMetric::SuccessRate => get_provider_leaderboard(env, ProviderMetric::BySuccessRate, limit),
-        LeaderboardMetric::Volume => get_provider_leaderboard(env, ProviderMetric::ByTotalProfitDelta, limit),
+        LeaderboardMetric::SuccessRate => {
+            get_provider_leaderboard(env, ProviderMetric::BySuccessRate, limit)
+        }
+        LeaderboardMetric::Volume => {
+            get_provider_leaderboard(env, ProviderMetric::ByTotalProfitDelta, limit)
+        }
         LeaderboardMetric::Followers => get_followers_leaderboard(env, stats_map, limit),
     }
 }
@@ -369,9 +373,7 @@ mod tests {
             assert_eq!(lb.get(0).unwrap().metric_value, 3000);
             assert_eq!(lb.get(0).unwrap().rank, 1);
             for i in 0..9u32 {
-                assert!(
-                    lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value
-                );
+                assert!(lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value);
             }
 
             // BY_TOTAL_ADOPTERS
@@ -379,18 +381,14 @@ mod tests {
             assert_eq!(lb.len(), 10);
             assert_eq!(lb.get(0).unwrap().metric_value, 150);
             for i in 0..9u32 {
-                assert!(
-                    lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value
-                );
+                assert!(lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value);
             }
 
             // BY_TOTAL_PROFIT_DELTA
             let lb = get_provider_leaderboard(&env, ProviderMetric::ByTotalProfitDelta, 10);
             assert_eq!(lb.len(), 10);
             for i in 0..9u32 {
-                assert!(
-                    lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value
-                );
+                assert!(lb.get(i).unwrap().metric_value >= lb.get(i + 1).unwrap().metric_value);
             }
 
             // BY_STAKE — no stakes set, all zero; verify <= 10 and descending

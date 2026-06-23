@@ -4,14 +4,8 @@
 use auto_trade::{
     authorize_user_with_limits, set_signal, AutoTradeContract, OrderType, Signal, TradeStatus,
 };
-use soroban_sdk::{
-    symbol_short,
-    testutils::Address as _,
-    Address, Env,
-};
-use stellar_swipe_common::perf::{
-    regression_budget_limit, BASELINE_AUTO_TRADE_INSTRUCTIONS,
-};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
+use stellar_swipe_common::perf::{regression_budget_limit, BASELINE_AUTO_TRADE_INSTRUCTIONS};
 
 const TRADE_AMOUNT: i128 = 1_000;
 
@@ -54,20 +48,15 @@ fn test_execute_trade_latency_regression() {
             .temporary()
             .set(&(symbol_short!("liquidity"), 1u64), &1_000_000_000i128);
         authorize_user_with_limits(&env, &user, 1_000_000_000i128, 30);
-        env.storage()
-            .temporary()
-            .set(&(user.clone(), symbol_short!("balance")), &1_000_000_000i128);
+        env.storage().temporary().set(
+            &(user.clone(), symbol_short!("balance")),
+            &1_000_000_000i128,
+        );
     });
 
     env.as_contract(&contract_id, || {
-        AutoTradeContract::execute_trade(
-            env.clone(),
-            user,
-            1,
-            OrderType::Market,
-            TRADE_AMOUNT,
-        )
-        .expect("trade should succeed");
+        AutoTradeContract::execute_trade(env.clone(), user, 1, OrderType::Market, TRADE_AMOUNT)
+            .expect("trade should succeed");
     });
 
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
@@ -120,9 +109,10 @@ fn test_rate_limit_recorded_after_trade() {
             .temporary()
             .set(&(symbol_short!("liquidity"), 1u64), &1_000_000_000i128);
         authorize_user_with_limits(&env, &user, 1_000_000_000i128, 30);
-        env.storage()
-            .temporary()
-            .set(&(user.clone(), symbol_short!("balance")), &1_000_000_000i128);
+        env.storage().temporary().set(
+            &(user.clone(), symbol_short!("balance")),
+            &1_000_000_000i128,
+        );
     });
 
     env.as_contract(&contract_id, || {

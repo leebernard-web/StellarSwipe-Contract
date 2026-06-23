@@ -16,11 +16,11 @@ mod voting;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
+mod test_committee_elections;
+#[cfg(test)]
 mod test_health;
 #[cfg(test)]
 mod test_pause_propagation;
-#[cfg(test)]
-mod test_committee_elections;
 
 use committees::{
     list_committees as list_registered_committees, CommitteeAction, CommitteeElection,
@@ -29,10 +29,10 @@ use committees::{
 };
 pub use committees::{
     Authority, Committee, CommitteeDecision, CrossCommitteeStatus, DecisionStatus,
+    ElectionResult as CommitteeElectionResult, ElectionStatus as CommitteeElectionStatus,
     EmergencyActionAuthority, EmergencyActionPayload, GrantApprovalAction, GrantApprovalAuthority,
     ParameterAdjustmentAuthority, PerformanceMetrics, RewardConfigUpdateAction,
     TreasurySpendAction, TreasurySpendAuthority, VetoAuthority, VetoPayload,
-    ElectionResult as CommitteeElectionResult, ElectionStatus as CommitteeElectionStatus,
 };
 use conviction_voting::{
     analyze_conviction_proposal, change_conviction_vote, create_conviction_pool,
@@ -55,12 +55,18 @@ use proposals::{
     get_governance_config, get_proposal, Proposal, ProposalStatistics, ProposalStatus,
     ProposalType, Vote, VoteDelegation, VoteType as GovernanceVoteType,
 };
+use quadratic_voting::{
+    allocate_vote_credits, calculate_marginal_cost, cast_quadratic_vote, compare_voting_systems,
+    get_quadratic_vote, get_quadratic_voting_config, get_vote_credits, reallocate_quadratic_votes,
+    refund_credits_on_failure, set_quadratic_voting_config, verify_identity, QuadraticVote,
+    QuadraticVotingConfig, VerificationMethod, VoteCredits, VotingComparison,
+};
 use reputation::{
     calculate_reputation_score, cast_reputation_weighted_vote, detect_staleness,
     distribute_reputation_rewards, get_governance_reputation, get_reputation_config,
     get_reputation_leaderboard, put_reputation_config, record_proposal_creation,
-    record_proposal_outcome, record_vote, refresh_stale_reputation, Badge, GovernanceReputation,
-    ReputationConfig, ReputationTier, StalenessLevel,
+    record_proposal_outcome, record_vote, refresh_stale_reputation, resolve_staleness, Badge,
+    GovernanceReputation, ReputationConfig, ReputationTier, StalenessLevel,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Symbol,
@@ -73,18 +79,10 @@ use timelock::{
     initialize_timelock, queue_action, update_timelock_delay, ActionType, QueuedAction, Timelock,
     TimelockAnalytics,
 };
-pub use reputation::{ReputationConfig, ReputationTier, StalenessLevel};
 pub use token::{HolderAnalytics, HolderBalance, TokenMetadata};
 pub use treasury::{
     Budget, BudgetApproval, BudgetReport, RebalanceAction, RecurringPayment, Treasury,
     TreasuryReport, TreasurySpend,
-};
-use quadratic_voting::{
-    allocate_vote_credits, cast_quadratic_vote, compare_voting_systems, reallocate_quadratic_votes,
-    refund_credits_on_failure, verify_identity, get_vote_credits, get_quadratic_vote,
-    get_quadratic_voting_config, set_quadratic_voting_config, calculate_marginal_cost,
-    QuadraticVotingConfig, VoteCredits, QuadraticVote, VerificationMethod,
-    VotingComparison,
 };
 
 const DEFAULT_LIQUIDITY_REWARD_BPS: u32 = 100;
@@ -297,7 +295,11 @@ impl GovernanceContract {
     }
 
     /// Sets the global pause flag read by `health_check` (admin only).
-    pub fn set_contract_paused(env: Env, admin: Address, paused: bool) -> Result<(), GovernanceError> {
+    pub fn set_contract_paused(
+        env: Env,
+        admin: Address,
+        paused: bool,
+    ) -> Result<(), GovernanceError> {
         require_admin(&env, &admin)?;
         env.storage()
             .instance()
@@ -588,7 +590,9 @@ impl GovernanceContract {
         user: Address,
     ) -> Result<GovernanceReputation, GovernanceError> {
         require_initialized(&env)?;
-        Ok(get_governance_reputation(&env, user))
+        let mut rep = get_governance_reputation(&env, user.clone());
+        rep.reputation_score = reputation::calculate_reputation_score(&env, user)?;
+        Ok(rep)
     }
 
     pub fn calculate_reputation_score(env: Env, user: Address) -> Result<u32, GovernanceError> {
@@ -645,8 +649,7 @@ impl GovernanceContract {
     /// Check the current staleness level for a user.
     pub fn check_reputation_staleness(env: Env, user: Address) -> StalenessLevel {
         let rep = get_governance_reputation(&env, user);
-        rep.staleness_override
-            .unwrap_or_else(|| detect_staleness(&env, rep.last_activity))
+        resolve_staleness(&env, &rep)
     }
 
     /// # Summary

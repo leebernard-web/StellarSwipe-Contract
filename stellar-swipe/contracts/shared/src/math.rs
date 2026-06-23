@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn same_precision_unchanged() {
-        assert_eq!(normalize_amount(1_000_000_0, 7, 7), Some(1_000_000_0));
+        assert_eq!(normalize_amount(10_000_000, 7, 7), Some(10_000_000));
         assert_eq!(normalize_amount(0, 7, 7), Some(0));
     }
 

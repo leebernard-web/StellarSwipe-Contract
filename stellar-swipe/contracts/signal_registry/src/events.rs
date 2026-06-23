@@ -146,14 +146,12 @@ pub fn emit_verification_eligibility_checked(env: &Env, provider: Address, eligi
 
 pub fn emit_follow_gained(env: &Env, user: Address, provider: Address, new_count: u32) {
     let topics = (Symbol::new(env, "follow_gained"),);
-    env.events()
-        .publish(topics, (user, provider, new_count));
+    env.events().publish(topics, (user, provider, new_count));
 }
 
 pub fn emit_follow_lost(env: &Env, user: Address, provider: Address, new_count: u32) {
     let topics = (Symbol::new(env, "follow_lost"),);
-    env.events()
-        .publish(topics, (user, provider, new_count));
+    env.events().publish(topics, (user, provider, new_count));
 }
 
 pub fn emit_tags_added(env: &Env, signal_id: u64, provider: Address, tag_count: u32) {
@@ -169,8 +167,7 @@ pub fn emit_collaborative_signal_created(env: &Env, signal_id: u64, authors: Vec
 
 pub fn emit_collaborative_signal_approved(env: &Env, signal_id: u64, approver: Address) {
     let topics = (Symbol::new(env, "collab_signal_approved"),);
-    env.events()
-        .publish(topics, (signal_id, approver));
+    env.events().publish(topics, (signal_id, approver));
 }
 
 pub fn emit_collaborative_signal_published(env: &Env, signal_id: u64) {
@@ -203,8 +200,7 @@ pub fn emit_combo_cancelled(env: &Env, combo_id: u64, provider: Address) {
 
 pub fn emit_signal_updated(env: &Env, signal_id: u64, version: u32, updater: Address) {
     let topics = (Symbol::new(env, "signal_updated"),);
-    env.events()
-        .publish(topics, (signal_id, version, updater));
+    env.events().publish(topics, (signal_id, version, updater));
 }
 
 #[contracttype]
@@ -240,8 +236,7 @@ pub fn emit_signal_edited(
 
 pub fn emit_copy_recorded(env: &Env, user: Address, signal_id: u64, version: u32) {
     let topics = (Symbol::new(env, "copy_recorded"),);
-    env.events()
-        .publish(topics, (user, signal_id, version));
+    env.events().publish(topics, (user, signal_id, version));
 }
 
 pub fn emit_cross_chain_signal_requested(
@@ -302,14 +297,12 @@ pub fn emit_emergency_paused(
 
 pub fn emit_emergency_unpaused(env: &Env, category: String, unpaused_by: Address) {
     let topics = (Symbol::new(env, "emergency_unpaused"),);
-    env.events()
-        .publish(topics, (category, unpaused_by));
+    env.events().publish(topics, (category, unpaused_by));
 }
 
 pub fn emit_circuit_breaker_triggered(env: &Env, category: String, reason: String) {
     let topics = (Symbol::new(env, "circuit_breaker_triggered"),);
-    env.events()
-        .publish(topics, (category, reason));
+    env.events().publish(topics, (category, reason));
 }
 
 pub fn emit_guardian_set(env: &Env, guardian: Address) {
@@ -365,16 +358,23 @@ pub fn emit_signal_expiry_warning(
     time_remaining_ledgers: u64,
 ) {
     let topics = (Symbol::new(env, "signal_expiry_warning"),);
-    env.events()
-        .publish(topics, (signal_id, provider, expires_at, time_remaining_ledgers));
+    env.events().publish(
+        topics,
+        (signal_id, provider, expires_at, time_remaining_ledgers),
+    );
 }
 
-pub fn emit_provider_cooling_off_started(
-    env: &Env,
-    provider: Address,
-    ends_at: u64,
-) {
+pub fn emit_provider_cooling_off_started(env: &Env, provider: Address, ends_at: u64) {
     let topics = (Symbol::new(env, "provider_cooling_off"),);
-    env.events()
-        .publish(topics, (provider, ends_at));
+    env.events().publish(topics, (provider, ends_at));
+}
+
+pub fn emit_migration_progress(env: &Env, progress: MigrationProgress) {
+    let topics = (Symbol::new(env, "migration_progress"),);
+    env.events().publish(topics, progress);
+}
+
+pub fn emit_signal_orphaned(env: &Env, signal_id: u64, reason: String) {
+    let topics = (Symbol::new(env, "signal_orphaned"),);
+    env.events().publish(topics, (signal_id, reason));
 }

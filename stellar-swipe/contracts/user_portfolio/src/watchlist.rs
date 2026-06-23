@@ -123,8 +123,26 @@ pub enum WatchlistError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+
+    #[contract]
+    struct WatchlistHarness;
+
+    #[contractimpl]
+    impl WatchlistHarness {}
+
+    fn setup() -> (Env, Address) {
+        let env = Env::default();
+        let contract_id = env.register(WatchlistHarness, ());
+        (env, contract_id)
+    }
+
+    fn run<F, R>(env: &Env, contract_id: &Address, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        env.as_contract(contract_id, f)
+    }
 
     fn never_expired(_id: u64) -> bool {
         false
@@ -140,76 +158,86 @@ mod tests {
 
     #[test]
     fn add_and_get_watchlist() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
-        add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
 
-        let list = get_watchlist(&env, user, never_expired);
-        assert_eq!(list.len(), 2);
+            let list = get_watchlist(&env, user, never_expired);
+            assert_eq!(list.len(), 2);
+        });
     }
 
     #[test]
     fn remove_from_watchlist_works() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
-        add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
-        remove_from_watchlist(&env, user.clone(), 1, never_expired);
+            add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
+            remove_from_watchlist(&env, user.clone(), 1, never_expired);
 
-        let list = get_watchlist(&env, user, never_expired);
-        assert_eq!(list.len(), 1);
-        assert_eq!(list.get(0).unwrap(), 2);
+            let list = get_watchlist(&env, user, never_expired);
+            assert_eq!(list.len(), 1);
+            assert_eq!(list.get(0).unwrap(), 2);
+        });
     }
 
     #[test]
     fn cap_enforced() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        for i in 0..WATCHLIST_CAP {
-            add_to_watchlist(&env, user.clone(), i as u64, never_expired).unwrap();
-        }
+            for i in 0..WATCHLIST_CAP {
+                add_to_watchlist(&env, user.clone(), i as u64, never_expired).unwrap();
+            }
 
-        let result = add_to_watchlist(&env, user, WATCHLIST_CAP as u64, never_expired);
-        assert_eq!(result, Err(WatchlistError::WatchlistFull));
+            let result = add_to_watchlist(&env, user, WATCHLIST_CAP as u64, never_expired);
+            assert_eq!(result, Err(WatchlistError::WatchlistFull));
+        });
     }
 
     #[test]
     fn expired_signal_rejected_on_add() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        let result = add_to_watchlist(&env, user, 99, always_expired);
-        assert_eq!(result, Err(WatchlistError::SignalExpired));
+            let result = add_to_watchlist(&env, user, 99, always_expired);
+            assert_eq!(result, Err(WatchlistError::SignalExpired));
+        });
     }
 
     #[test]
     fn expired_signals_removed_on_access() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        // Add signal 1 (not expired yet)
-        add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
-        add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 1, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 2, never_expired).unwrap();
 
-        // Now signal 1 expires — get_watchlist should prune it
-        let list = get_watchlist(&env, user, expired_if(1));
-        assert_eq!(list.len(), 1);
-        assert_eq!(list.get(0).unwrap(), 2);
+            let list = get_watchlist(&env, user, expired_if(1));
+            assert_eq!(list.len(), 1);
+            assert_eq!(list.get(0).unwrap(), 2);
+        });
     }
 
     #[test]
     fn deduplication_no_op() {
-        let env = Env::default();
-        let user = Address::generate(&env);
+        let (env, contract_id) = setup();
+        run(&env, &contract_id, || {
+            let user = Address::generate(&env);
 
-        add_to_watchlist(&env, user.clone(), 5, never_expired).unwrap();
-        add_to_watchlist(&env, user.clone(), 5, never_expired).unwrap(); // duplicate
+            add_to_watchlist(&env, user.clone(), 5, never_expired).unwrap();
+            add_to_watchlist(&env, user.clone(), 5, never_expired).unwrap();
 
-        let list = get_watchlist(&env, user, never_expired);
-        assert_eq!(list.len(), 1);
+            let list = get_watchlist(&env, user, never_expired);
+            assert_eq!(list.len(), 1);
+        });
     }
 }

@@ -191,7 +191,7 @@ fn multiple_positions_aggregate() {
     client.close_position(&user, &2, &-5, &95i128, &0u32, &provider, &0u64);
 
     let pnl = client.get_pnl(&user);
-    assert_eq!(pnl.realized_pnl, 15);   // 20 + (-5)
+    assert_eq!(pnl.realized_pnl, 15); // 20 + (-5)
     assert_eq!(pnl.total_pnl, 15);
     // roi_bps = 15 * 10_000 / 20 = 7500
     assert_eq!(pnl.roi_bps, 7_500);
@@ -259,7 +259,10 @@ fn close_position_emits_position_closed_event_on_loss() {
             .unwrap_or(false)
     });
 
-    assert!(pos_closed.is_some(), "EvtPositionClosed not emitted on loss");
+    assert!(
+        pos_closed.is_some(),
+        "EvtPositionClosed not emitted on loss"
+    );
     let evt: shared::events::EvtPositionClosed =
         shared::events::EvtPositionClosed::try_from_val(&env, &pos_closed.unwrap().2).unwrap();
     assert_eq!(evt.realized_pnl, -20);
