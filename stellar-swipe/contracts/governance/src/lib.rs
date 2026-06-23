@@ -65,8 +65,8 @@ use reputation::{
     calculate_reputation_score, cast_reputation_weighted_vote, detect_staleness,
     distribute_reputation_rewards, get_governance_reputation, get_reputation_config,
     get_reputation_leaderboard, put_reputation_config, record_proposal_creation,
-    record_proposal_outcome, record_vote, refresh_stale_reputation, Badge, GovernanceReputation,
-    ReputationConfig, ReputationTier, StalenessLevel,
+    record_proposal_outcome, record_vote, refresh_stale_reputation, resolve_staleness, Badge,
+    GovernanceReputation, ReputationConfig, ReputationTier, StalenessLevel,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Symbol,

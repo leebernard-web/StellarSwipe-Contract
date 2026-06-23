@@ -173,6 +173,20 @@ impl SignalRegistry {
         Ok(())
     }
 
+    /// Register the UserPortfolio contract used for PREMIUM subscription checks.
+    pub fn set_user_portfolio(
+        env: Env,
+        caller: Address,
+        portfolio: Address,
+    ) -> Result<(), AdminError> {
+        admin::require_admin(&env, &caller)?;
+        caller.require_auth();
+        env.storage()
+            .instance()
+            .set(&StorageKey::UserPortfolio, &portfolio);
+        Ok(())
+    }
+
     /// Admin: migrate batched v1 signal records from [`StorageKey::SignalsV1`] into v2
     /// [`StorageKey::Signals`]. Idempotent; safe to call until all v1 rows are gone.
     pub fn migrate_signals_v1_to_v2(

@@ -1340,14 +1340,15 @@ fn detect_staleness_logic() {
 #[cfg(test)]
 mod event_format_tests {
     use super::*;
-    use soroban_sdk::{testutils::Events, Symbol};
+    use soroban_sdk::testutils::Events;
+    use soroban_sdk::{Symbol, TryFromVal};
 
     fn last_topics(env: &Env) -> (Symbol, Symbol) {
         let events = env.events().all();
         let e = events.last().unwrap();
         let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
-        let t0 = Symbol::try_from(topics.get(0).unwrap()).unwrap();
-        let t1 = Symbol::try_from(topics.get(1).unwrap()).unwrap();
+        let t0 = Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap();
+        let t1 = Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap();
         (t0, t1)
     }
 
@@ -1389,8 +1390,12 @@ mod event_format_tests {
         // Find stake_changed event
         let found = env.events().all().iter().any(|e| {
             let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
-            let t0 = topics.get(0).and_then(|v| Symbol::try_from(v).ok());
-            let t1 = topics.get(1).and_then(|v| Symbol::try_from(v).ok());
+            let t0 = topics
+                .get(0)
+                .and_then(|v| Symbol::try_from_val(&env, &v).ok());
+            let t1 = topics
+                .get(1)
+                .and_then(|v| Symbol::try_from_val(&env, &v).ok());
             t0 == Some(Symbol::new(&env, "governance"))
                 && t1 == Some(Symbol::new(&env, "stake_changed"))
         });

@@ -86,6 +86,26 @@ pub fn migrate_user(env: &Env, user: &Address) -> (u32, u32) {
 
 /// Batch-migrate up to `batch_size` users from the pending queue.
 /// Admin must have pre-populated `MigrationQueue` via `register_migration_users`.
+pub fn register_migration_users(env: &Env, users: &Vec<Address>) {
+    let mut queue: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MigrationQueue)
+        .unwrap_or_else(|| Vec::new(env));
+
+    for i in 0..users.len() {
+        if let Some(user) = users.get(i) {
+            queue.push_back(user);
+        }
+    }
+
+    env.storage()
+        .instance()
+        .set(&DataKey::MigrationQueue, &queue);
+}
+
+/// Batch-migrate up to `batch_size` users from the pending queue.
+/// Admin must have pre-populated `MigrationQueue` via `register_migration_users`.
 pub fn migrate_batch(env: &Env, batch_size: u32) -> u32 {
     let mut queue: Vec<Address> = env
         .storage()

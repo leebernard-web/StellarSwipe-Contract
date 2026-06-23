@@ -281,6 +281,18 @@ impl UserPortfolio {
         onboarding::emit_onboarding_status_updated(&env, user, status, milestone);
     }
 
+    /// Admin: enqueue users for V1 → V2 portfolio layout migration.
+    pub fn register_migration_users(env: Env, users: Vec<Address>) {
+        Self::require_admin(&env);
+        migration::register_migration_users(&env, &users);
+    }
+
+    /// Admin: migrate up to `batch_size` queued users from V1 to V2 layout.
+    pub fn migrate_portfolio_v1_to_v2(env: Env, batch_size: u32) -> u32 {
+        Self::require_admin(&env);
+        migration::migrate_batch(&env, batch_size)
+    }
+
     /// Opens a position for `user` (caller must be `user`). `amount` is invested notional at entry.
     pub fn open_position(env: Env, user: Address, entry_price: i128, amount: i128) -> u64 {
         user.require_auth();
