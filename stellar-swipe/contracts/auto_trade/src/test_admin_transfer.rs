@@ -13,7 +13,7 @@ fn test_propose_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -38,7 +38,7 @@ fn test_accept_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -62,7 +62,7 @@ fn test_accept_with_wrong_address_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -82,7 +82,7 @@ fn test_cancel_admin_transfer_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -104,7 +104,7 @@ fn test_transfer_expiry_auto_trade() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -133,7 +133,7 @@ fn test_non_admin_cannot_propose_transfer() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -155,7 +155,7 @@ fn test_guardian_cannot_escalate_to_admin() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -185,7 +185,7 @@ fn test_reinitialize_blocked() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -208,7 +208,7 @@ fn test_pending_admin_has_no_privileges_before_accept() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -238,7 +238,7 @@ fn test_old_admin_loses_privileges_after_transfer() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, AutoTradeContract);
+    let contract_id = env.register(AutoTradeContract, ());
     let client = AutoTradeContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);

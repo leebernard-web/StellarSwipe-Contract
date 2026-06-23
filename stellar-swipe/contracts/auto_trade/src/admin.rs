@@ -88,7 +88,6 @@ pub fn get_operator(env: &Env) -> Result<Address, AutoTradeError> {
 /// Set operator (admin only)
 pub fn set_operator(env: &Env, caller: &Address, operator: Address) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     env.storage()
         .instance()
@@ -115,7 +114,6 @@ pub fn require_operator(env: &Env, caller: &Address) -> Result<(), AutoTradeErro
 
 pub fn set_guardian(env: &Env, caller: &Address, guardian: Address) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     env.storage()
         .instance()
         .set(&AdminStorageKey::Guardian, &guardian);
@@ -126,7 +124,6 @@ pub fn set_guardian(env: &Env, caller: &Address, guardian: Address) -> Result<()
 
 pub fn revoke_guardian(env: &Env, caller: &Address) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     let guardian: Address = env
         .storage()
         .instance()
@@ -157,7 +154,6 @@ pub fn pause_category(
         caller.require_auth();
     } else {
         require_admin(env, caller)?;
-        caller.require_auth();
     }
 
     let now = env.ledger().timestamp();
@@ -183,7 +179,6 @@ pub fn unpause_category(
     category: String,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     let mut states = get_pause_states(env);
     if states.contains_key(category.clone()) {
         states.remove(category.clone());
@@ -232,7 +227,6 @@ pub fn set_cb_config(
     config: CircuitBreakerConfig,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     env.storage()
         .instance()
         .set(&AdminStorageKey::CircuitBreakerConfig, &config);
@@ -306,7 +300,6 @@ pub fn propose_admin_transfer(
     new_admin: Address,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     let now = env.ledger().timestamp();
     let expires_at = now + PENDING_ADMIN_EXPIRY_LEDGERS;
@@ -383,7 +376,6 @@ pub fn accept_admin_transfer(env: &Env, caller: &Address) -> Result<(), AutoTrad
 /// Cancel pending admin transfer (current admin only)
 pub fn cancel_admin_transfer(env: &Env, caller: &Address) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     let _pending: Address = env
         .storage()
         .instance()
@@ -476,7 +468,6 @@ pub fn require_self_destruct_allowed(env: &Env) -> Result<(), AutoTradeError> {
 
 pub fn disable_self_destruct_protection(env: &Env, caller: &Address) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     env.storage()
         .instance()
         .set(&AdminStorageKey::PreventSelfDestruct, &false);

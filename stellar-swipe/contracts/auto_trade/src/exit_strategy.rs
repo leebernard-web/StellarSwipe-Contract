@@ -191,7 +191,7 @@ pub fn check_and_execute_exits(
 
         if let Some(trail_pct) = tightest_trail {
             let stop_price = calculate_trailing_stop(strategy.highest_price, trail_pct);
-            if current_price <= stop_price && strategy.current_position_size > 0 {
+            if current_price < stop_price && strategy.current_position_size > 0 {
                 let trade_id = execute_sell(
                     env,
                     &strategy.user,

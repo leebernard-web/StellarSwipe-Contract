@@ -69,7 +69,6 @@ pub fn set_oracle_address(
     oracle: Address,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     env.storage()
         .instance()
         .set(&AdminStorageKey::OracleAddress, &oracle);
@@ -93,7 +92,6 @@ pub fn override_oracle_circuit_breaker(
     enabled: bool,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     let mut state = get_cb_state(env);
     state.admin_override = enabled;
     set_cb_state(env, &state);
@@ -251,7 +249,6 @@ pub fn add_oracle(
     oracle_addr: Address,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     let mut list = get_oracle_whitelist(env, asset_pair);
     // Idempotency: skip if already present
@@ -278,7 +275,6 @@ pub fn remove_oracle(
     oracle_addr: Address,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     let list = get_oracle_whitelist(env, asset_pair);
 

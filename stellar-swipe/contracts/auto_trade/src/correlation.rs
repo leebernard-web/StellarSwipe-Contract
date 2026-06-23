@@ -246,12 +246,16 @@ pub fn check_portfolio_correlation(
     }
 
     let new_total_correlated = high_corr_exposure + new_amount;
-    let base = if total_portfolio_value > 0 {
-        total_portfolio_value
+    let corr_pct = if high_corr_count == 0 {
+        0
     } else {
-        new_amount.max(1)
+        let base = if total_portfolio_value > 0 {
+            total_portfolio_value
+        } else {
+            new_amount.max(1)
+        };
+        (new_total_correlated * 100) / base
     };
-    let corr_pct = (new_total_correlated * 100) / base;
 
     let risk_level = if corr_pct > 70 {
         RiskLevel::High

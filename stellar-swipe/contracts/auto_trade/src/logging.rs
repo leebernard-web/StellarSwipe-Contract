@@ -107,7 +107,6 @@ pub fn record_trade_outcome(env: &Env, status: &crate::TradeStatus) {
 
 pub fn set_log_level(env: &Env, caller: &Address, level: LogLevel) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
     env.storage()
         .instance()
         .set(&LoggingStorageKey::Config, &level);

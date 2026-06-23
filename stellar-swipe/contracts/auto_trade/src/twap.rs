@@ -451,35 +451,39 @@ pub fn cancel_twap_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AutoTradeContract, AutoTradeContractClient};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
 
-    fn setup_env() -> (Env, Address) {
+    fn setup() -> (Env, AutoTradeContractClient<'static>) {
         let env = Env::default();
-        let user = Address::generate(&env);
+        env.mock_all_auths();
         env.ledger().set_timestamp(1_000);
-        (env, user)
+        let contract = env.register(crate::AutoTradeContract, ());
+        let client = AutoTradeContractClient::new(&env, &contract);
+        (env, client)
+    }
+
+    fn user(env: &Env) -> Address {
+        Address::generate(env)
     }
 
     #[test]
     fn test_create_twap_order() {
-        let (env, user) = setup_env();
+        let (env, client) = setup();
+        let trader = user(&env);
         let pair = AssetPair {
             base: String::from_str(&env, "XLM"),
             quote: String::from_str(&env, "USDC"),
         };
 
-        // 10000 XLM over 60 mins -> default segments: max(60/5, 4) = 12
-        let result = create_twap_order(&env, user.clone(), pair.clone(), 10000, 60, None, None);
-        assert!(result.is_ok());
+        let order_id = client.create_twap_order(&trader, &pair, &10000, &60, &None, &None);
+        let twap = client.get_twap_order(&order_id);
 
-        let order_id = result.unwrap();
-        let twap = get_twap_order(&env, order_id).unwrap();
-
-        assert_eq!(twap.user, user);
+        assert_eq!(twap.user, trader);
         assert_eq!(twap.total_amount, 10000);
         assert_eq!(twap.duration_seconds, 3600);
         assert_eq!(twap.total_segments, 12);
-        assert_eq!(twap.interval_seconds, 300); // 3600 / 12 = 300 sec (5 minutes)
+        assert_eq!(twap.interval_seconds, 300);
         assert_eq!(twap.amount_per_segment, 10000 / 12);
         assert_eq!(twap.segments_executed, 0);
         assert_eq!(twap.status, TWAPStatus::Active);
@@ -487,101 +491,93 @@ mod tests {
 
     #[test]
     fn test_twap_segment_execution() {
-        let (env, user) = setup_env();
+        let (env, client) = setup();
+        let trader = user(&env);
         let pair = AssetPair {
             base: String::from_str(&env, "XLM"),
             quote: String::from_str(&env, "USDC"),
         };
 
-        let order_id =
-            create_twap_order(&env, user.clone(), pair.clone(), 12000, 60, Some(12), None).unwrap();
-
-        let twap_before = get_twap_order(&env, order_id).unwrap();
+        let order_id = client.create_twap_order(&trader, &pair, &12000, &60, &Some(12), &None);
+        let twap_before = client.get_twap_order(&order_id);
         assert_eq!(twap_before.amount_per_segment, 1000);
 
-        // Advance time by 5 minutes (1 segment interval)
         env.ledger().set_timestamp(1_000 + 301);
-        let executed_ids = execute_twap_segments(&env);
+        let executed_ids = client.execute_twap_segments();
         assert_eq!(executed_ids.len(), 1);
 
-        let twap_after_1 = get_twap_order(&env, order_id).unwrap();
+        let twap_after_1 = client.get_twap_order(&order_id);
         assert_eq!(twap_after_1.segments_executed, 1);
         assert_eq!(twap_after_1.filled_amount, 1000);
 
-        // Advance time by 15 more minutes (3 segment intervals)
         env.ledger().set_timestamp(1301 + 900);
-        let executed_ids_2 = execute_twap_segments(&env);
+        let executed_ids_2 = client.execute_twap_segments();
         assert_eq!(executed_ids_2.len(), 3);
 
-        let twap_after_4 = get_twap_order(&env, order_id).unwrap();
+        let twap_after_4 = client.get_twap_order(&order_id);
         assert_eq!(twap_after_4.segments_executed, 4);
         assert_eq!(twap_after_4.filled_amount, 4000);
     }
 
     #[test]
     fn test_twap_cancellation() {
-        let (env, user) = setup_env();
+        let (env, client) = setup();
+        let trader = user(&env);
         let pair = AssetPair {
             base: String::from_str(&env, "BTC"),
             quote: String::from_str(&env, "USD"),
         };
 
-        let order_id =
-            create_twap_order(&env, user.clone(), pair.clone(), 6000, 60, Some(6), None).unwrap();
+        let order_id = client.create_twap_order(&trader, &pair, &6000, &60, &Some(6), &None);
 
-        // Execute 2 segments (20 minutes pass)
         env.ledger().set_timestamp(1_000 + 1201);
-        execute_twap_segments(&env);
+        client.execute_twap_segments();
 
-        let summary = cancel_twap_order(&env, order_id, user.clone()).unwrap();
+        let summary = client.cancel_twap_order(&order_id, &trader);
         assert_eq!(summary.segments_executed, 2);
         assert_eq!(summary.filled_amount, 2000);
         assert_eq!(summary.remaining_amount, 4000);
 
-        let twap = get_twap_order(&env, order_id).unwrap();
+        let twap = client.get_twap_order(&order_id);
         assert_eq!(twap.status, TWAPStatus::Cancelled);
     }
 
     #[test]
     fn test_twap_dynamic_adjustment() {
-        let (env, user) = setup_env();
+        let (env, client) = setup();
+        let trader = user(&env);
         let pair = AssetPair {
             base: String::from_str(&env, "ETH"),
             quote: String::from_str(&env, "USD"),
         };
 
-        // Create with 10 minute interval
-        let order_id =
-            create_twap_order(&env, user.clone(), pair.clone(), 1000, 100, Some(10), None).unwrap();
-        let initial_interval = get_twap_order(&env, order_id).unwrap().interval_seconds;
+        let order_id = client.create_twap_order(&trader, &pair, &1000, &100, &Some(10), &None);
+        let initial_interval = client.get_twap_order(&order_id).interval_seconds;
         assert_eq!(initial_interval, 600);
 
-        // Adjust strategy (volatility is mocked to be > baseline * 1.5)
-        let _ = adjust_twap_strategy(&env, order_id);
+        client.adjust_twap_strategy(&order_id);
 
-        let adjusted_twap = get_twap_order(&env, order_id).unwrap();
-        // 50% increase in interval
+        let adjusted_twap = client.get_twap_order(&order_id);
         assert_eq!(adjusted_twap.interval_seconds, 600 * 150 / 100);
     }
 
     #[test]
     fn test_order_completion() {
-        let (env, user) = setup_env();
+        let (env, client) = setup();
+        let trader = user(&env);
         let pair = AssetPair {
             base: String::from_str(&env, "SOL"),
             quote: String::from_str(&env, "USDC"),
         };
 
-        let order_id =
-            create_twap_order(&env, user.clone(), pair.clone(), 5000, 50, Some(5), None).unwrap();
+        let order_id = client.create_twap_order(&trader, &pair, &5000, &50, &Some(5), &None);
 
-        // Fast forward beyond the entire duration (50 mins = 3000 seconds)
         env.ledger().set_timestamp(1_000 + 3001);
-        let executed_ids = execute_twap_segments(&env);
+        let executed_ids = client.execute_twap_segments();
 
         assert_eq!(executed_ids.len(), 5);
 
-        let twap = get_twap_order(&env, order_id).unwrap();
+        let twap = client.get_twap_order(&order_id);
         assert_eq!(twap.segments_executed, 5);
         assert_eq!(twap.filled_amount, 5000);
         assert_eq!(twap.status, TWAPStatus::Complete);

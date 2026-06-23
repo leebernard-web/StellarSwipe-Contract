@@ -62,7 +62,6 @@ pub fn verify_kyc(
     verified: bool,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     let mut data: KYCData = env
         .storage()
