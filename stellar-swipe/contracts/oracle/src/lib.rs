@@ -3,6 +3,7 @@
 mod admin;
 mod conversion;
 mod errors;
+#[allow(deprecated)]
 mod events;
 mod external_adapter;
 mod history;
@@ -18,8 +19,8 @@ use reputation::{
     adjust_oracle_weight, calculate_reputation, get_oracle_stats, should_remove_oracle,
     slash_oracle, track_oracle_accuracy, SlashReason,
 };
-use sdex::{calculate_spot_price, OrderBook, OrderEntry};
-use soroban_sdk::{contract, contractimpl, symbol_short, vec, Address, Env, Map, String, Vec};
+use sdex::{calculate_spot_price, OrderBook};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Map, String, Vec};
 use staleness::{OracleHealth, OracleStatus, StalenessLevel};
 use stellar_swipe_common::emergency::{PauseState, CAT_ALL};
 use stellar_swipe_common::{

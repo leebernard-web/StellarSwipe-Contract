@@ -88,7 +88,7 @@ fn test_submit_signal_from_template() {
 
     let template_id = client.save_signal_template(
         &provider,
-        &SignalTemplate {
+        &SignalTemplatePreset {
             asset_pair: String::from_str(&env, "XLM/USDC"),
             action: SignalAction::Buy,
             risk_rating: 3,

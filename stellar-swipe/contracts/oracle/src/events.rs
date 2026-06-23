@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Env, String, Symbol};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 
 use crate::staleness::OracleStatus;
 
@@ -49,8 +49,19 @@ pub fn emit_oracle_heartbeat_missed(
     last_update_ledger: u32,
     ledgers_since_update: u32,
 ) {
+    #[allow(deprecated)]
     env.events().publish(
         (symbol_short!("oracle"), symbol_short!("hb_missed")),
         (status, last_update_ledger, ledgers_since_update),
     );
+}
+
+pub fn emit_guardian_set(env: &Env, guardian: Address) {
+    env.events()
+        .publish((Symbol::new(env, "guardian_set"),), guardian);
+}
+
+pub fn emit_guardian_revoked(env: &Env, guardian: Address) {
+    env.events()
+        .publish((Symbol::new(env, "guardian_revoked"),), guardian);
 }

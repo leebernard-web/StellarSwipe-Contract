@@ -1,7 +1,7 @@
 use crate::admin;
 use crate::errors::AdminError;
-use crate::submission::{Action, Signal};
-use crate::types::{Outcome, ProviderProfile, SignalStatus};
+use crate::submission::{Action, Signal as SubmissionSignal};
+use crate::types::{Outcome, ProviderProfile, Signal, SignalStatus};
 use soroban_sdk::{contracttype, Address, BytesN, Env, Map, String};
 
 /// Persistent cache: active signal count per provider (O(1) limit checks).
@@ -124,7 +124,7 @@ pub fn validate_provider_signal_limit(
 /// with the ID of the existing duplicate signal.
 pub fn check_duplicate_signal(
     env: &Env,
-    storage: &Map<u64, Signal>,
+    storage: &Map<u64, SubmissionSignal>,
     provider: &Address,
     asset_pair: &String,
     action: &Action,
@@ -357,7 +357,7 @@ pub fn is_provider_cooling_off(env: &Env, profile: &ProviderProfile) -> bool {
     }
 
     let current_ledger = env.ledger().sequence();
-    if current_ledger >= profile.cooling_off_ends_at {
+    if (current_ledger as u64) >= profile.cooling_off_ends_at {
         return false;
     }
 
@@ -367,7 +367,7 @@ pub fn is_provider_cooling_off(env: &Env, profile: &ProviderProfile) -> bool {
 
     for i in 0..5 {
         if let Some(outcome) = profile.last_5_outcomes.get(i as u32) {
-            if outcome != &Outcome::Loss {
+            if outcome != Outcome::Loss {
                 return false;
             }
         } else {
@@ -405,8 +405,8 @@ mod tests {
         price: i128,
         timestamp: u64,
         expiry: u64,
-    ) -> Signal {
-        Signal {
+    ) -> SubmissionSignal {
+        SubmissionSignal {
             provider,
             asset_pair,
             action,
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn test_exact_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn test_near_duplicate_within_1_percent() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn test_non_duplicate_outside_1_percent() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn test_expired_signal_not_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn test_different_provider_not_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider1 = <Address as TestAddress>::generate(&env);
         let provider2 = <Address as TestAddress>::generate(&env);
 
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn test_different_asset_pair_not_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn test_different_action_not_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn test_old_signal_not_duplicate() {
         let env = Env::default();
-        let mut storage: Map<u64, Signal> = Map::new(&env);
+        let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
         let now = env.ledger().timestamp();

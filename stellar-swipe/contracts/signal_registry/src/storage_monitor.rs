@@ -5,7 +5,7 @@
 //! ProviderStakes) as a proxy for usage and emit a warning event when the total
 //! exceeds 80% of the configured limit.
 
-use soroban_sdk::{Address, Env, Map};
+use soroban_sdk::{contracttype, Address, Env, Map};
 
 use crate::events::emit_storage_capacity_warning;
 use crate::expiry::archive_old_signals;
@@ -18,6 +18,7 @@ pub const INSTANCE_ENTRY_LIMIT: u32 = 1000;
 /// Warning threshold: 80%.
 const WARNING_THRESHOLD_BPS: u32 = 8000;
 
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageUsage {
     pub signal_count: u32,

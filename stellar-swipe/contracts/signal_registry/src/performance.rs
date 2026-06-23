@@ -237,7 +237,7 @@ pub fn calculate_benchmark_and_alpha(_env: &Env, signal: &Signal) -> (Option<i64
         return (None, None);
     }
 
-    let signal_return_bps = signal.total_roi / (signal.executions as i128);
+    let _signal_return_bps = signal.total_roi / (signal.executions as i128);
 
     (None, None)
 }

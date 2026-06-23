@@ -1,7 +1,7 @@
-use soroban_sdk::{contracttype, Address, Bytes, Env, String, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, Env, IntoVal, Map, String, Symbol, Val, Vec};
 
-use crate::types::{ProviderPerformance, Signal, SignalStatus};
 use crate::events;
+use crate::types::{ProviderPerformance, Signal, SignalStatus};
 
 /// Storage key for the banned providers map
 #[contracttype]
@@ -153,11 +153,7 @@ where
 {
     // Prevent duplicate pending appeals.
     let key = ProviderStorageKey::BanAppeal(provider.clone());
-    if let Some(existing) = env
-        .storage()
-        .persistent()
-        .get::<_, BanAppeal>(&key)
-    {
+    if let Some(existing) = env.storage().persistent().get::<_, BanAppeal>(&key) {
         if existing.status == AppealStatus::Pending {
             return Err(AppealError::AppealAlreadyPending);
         }
@@ -176,8 +172,7 @@ where
     env.storage().persistent().set(&key, &appeal);
 
     let topics = (Symbol::new(env, "ban_appeal_submitted"),);
-    env.events()
-        .publish(topics, (provider, proposal_id));
+    env.events().publish(topics, (provider, proposal_id));
 
     Ok(appeal)
 }
@@ -186,11 +181,7 @@ where
 ///
 /// Restores the provider's `verified` flag in their profile and emits `BanReversed`.
 /// `return_stake_fn` is injected to handle stake return logic.
-pub fn reverse_ban<F>(
-    env: &Env,
-    provider: Address,
-    return_stake_fn: F,
-) -> Result<(), AppealError>
+pub fn reverse_ban<F>(env: &Env, provider: Address, return_stake_fn: F) -> Result<(), AppealError>
 where
     F: Fn(&Env, &Address) -> Result<(), AppealError>,
 {
@@ -346,9 +337,10 @@ pub fn ban_provider(
     stake_vault: &Address,
 ) -> (u32, i128) {
     // Mark provider as banned by storing the reason hash
-    env.storage()
-        .persistent()
-        .set(&BanStorageKey::ProviderBanReason(provider.clone()), reason_hash);
+    env.storage().persistent().set(
+        &BanStorageKey::ProviderBanReason(provider.clone()),
+        reason_hash,
+    );
 
     // Cancel all active signals from this provider
     let mut signals_cancelled: u32 = 0;
@@ -365,7 +357,7 @@ pub fn ban_provider(
     }
 
     // Slash full stake via cross-contract call to StakeVault
-    let stake_slashed = Self::slash_stake(env, provider, stake_vault);
+    let stake_slashed = slash_stake(env, provider, stake_vault);
 
     (signals_cancelled, stake_slashed)
 }
@@ -375,9 +367,7 @@ fn slash_stake(env: &Env, provider: &Address, stake_vault: &Address) -> i128 {
     let sym = soroban_sdk::Symbol::new(env, "get_stake");
     let mut args = soroban_sdk::Vec::<soroban_sdk::Val>::new(env);
     args.push_back(provider.clone().into_val(env));
-    let stake: i128 = env
-        .invoke_contract(stake_vault, &sym, args)
-        .unwrap_or(0);
+    let stake: i128 = env.invoke_contract(stake_vault, &sym, args);
 
     if stake > 0 {
         // Call slash_stake on StakeVault — pass this contract as caller (authorizes the slash),
@@ -390,7 +380,7 @@ fn slash_stake(env: &Env, provider: &Address, stake_vault: &Address) -> i128 {
         slash_args.push_back(stake.into_val(env));
         let reason = soroban_sdk::Symbol::new(env, "ban");
         slash_args.push_back(reason.into_val(env));
-        let _ = env.try_invoke_contract::<()>(stake_vault, &slash_sym, slash_args);
+        let _ = env.invoke_contract::<()>(stake_vault, &slash_sym, slash_args);
     }
 
     stake
@@ -408,8 +398,10 @@ pub fn emit_provider_banned(
         soroban_sdk::Symbol::new(env, "provider_banned"),
         provider.clone(),
     );
-    env.events()
-        .publish(topics, (reason_hash.clone(), signals_cancelled, stake_slashed));
+    env.events().publish(
+        topics,
+        (reason_hash.clone(), signals_cancelled, stake_slashed),
+    );
 }
 
 #[cfg(test)]
@@ -587,10 +579,14 @@ mod tests {
         let provider = Address::generate(&env);
         let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
 
-        submit_ban_appeal(&env, provider.clone(), evidence.clone(), stub_create_proposal)
-            .unwrap();
-        let result =
-            submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal);
+        submit_ban_appeal(
+            &env,
+            provider.clone(),
+            evidence.clone(),
+            stub_create_proposal,
+        )
+        .unwrap();
+        let result = submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal);
         assert_eq!(result, Err(AppealError::AppealAlreadyPending));
     }
 

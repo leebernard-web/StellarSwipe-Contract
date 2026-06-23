@@ -368,3 +368,13 @@ pub fn emit_provider_cooling_off_started(env: &Env, provider: Address, ends_at: 
     let topics = (Symbol::new(env, "provider_cooling_off"),);
     env.events().publish(topics, (provider, ends_at));
 }
+
+pub fn emit_migration_progress(env: &Env, progress: MigrationProgress) {
+    let topics = (Symbol::new(env, "migration_progress"),);
+    env.events().publish(topics, progress);
+}
+
+pub fn emit_signal_orphaned(env: &Env, signal_id: u64, reason: String) {
+    let topics = (Symbol::new(env, "signal_orphaned"),);
+    env.events().publish(topics, (signal_id, reason));
+}
