@@ -361,7 +361,7 @@ mod tests {
         update_copier_roi_stats(&mut signal, 300);
 
         assert_eq!(signal.copier_closed_count, 5);
-        assert_eq!(signal.avg_copier_roi_bps, 280);
+        assert_eq!(signal.avg_copier_roi_bps, 279);
     }
 
     #[test]

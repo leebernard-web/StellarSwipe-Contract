@@ -243,84 +243,66 @@ mod tests {
             .set(&crate::StorageKey::ProviderStakes, &stakes);
     }
 
+    fn with_contract<R>(f: impl FnOnce(&Env) -> R) -> R {
+        let env = Env::default();
+        #[allow(deprecated)]
+        let cid = env.register_contract(None, crate::SignalRegistry);
+        env.as_contract(&cid, || f(&env))
+    }
+
     #[test]
     fn test_all_components_present() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // Setup: 80% success rate, 50 adoptions, GOLD stake, 90 AI score
-        setup_stake(&env, &provider, GOLD_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 8, 50, Some(90));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (80 * 0.4) + (50 * 0.2) + (100 * 0.2) + (90 * 0.2)
-        //         = 32 + 10 + 20 + 18 = 80
-        assert_eq!(score, 80);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, GOLD_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 8, 50, Some(90));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 80);
+        });
     }
 
     #[test]
     fn test_missing_ai_score() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // Setup: 80% success rate, 50 adoptions, GOLD stake, NO AI score
-        setup_stake(&env, &provider, GOLD_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 8, 50, None);
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (80 * 0.6) + (50 * 0.2) + (100 * 0.2)
-        //         = 48 + 10 + 20 = 78
-        assert_eq!(score, 78);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, GOLD_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 8, 50, None);
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 78);
+        });
     }
 
     #[test]
     fn test_zero_success_rate() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // Setup: 0% success rate, 50 adoptions, GOLD stake, 90 AI score
-        setup_stake(&env, &provider, GOLD_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 0, 50, Some(90));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (0 * 0.4) + (50 * 0.2) + (100 * 0.2) + (90 * 0.2)
-        //         = 0 + 10 + 20 + 18 = 48
-        assert_eq!(score, 48);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, GOLD_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 0, 50, Some(90));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 48);
+        });
     }
 
     #[test]
     fn test_zero_executions() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // Setup: No executions yet, 0 adoptions, BRONZE stake, 50 AI score
-        setup_stake(&env, &provider, BRONZE_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 0, 0, 0, Some(50));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (0 * 0.4) + (0 * 0.2) + (33 * 0.2) + (50 * 0.2)
-        //         = 0 + 0 + 6.6 + 10 = 16.6 ≈ 16
-        assert_eq!(score, 16);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, BRONZE_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 0, 0, 0, Some(50));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 16);
+        });
     }
 
     #[test]
     fn test_max_adoption_capped() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // Setup: 150 adoptions (should cap at 100)
-        setup_stake(&env, &provider, SILVER_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 10, 150, Some(80));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (100 * 0.4) + (100 * 0.2) + (66 * 0.2) + (80 * 0.2)
-        //         = 40 + 20 + 13.2 + 16 = 89.2 ≈ 89
-        assert_eq!(score, 89);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, SILVER_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 10, 150, Some(80));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 89);
+        });
     }
 
     #[test]
@@ -376,65 +358,49 @@ mod tests {
 
     #[test]
     fn test_score_always_0_to_100() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, GOLD_THRESHOLD);
 
-        // Test various combinations
-        setup_stake(&env, &provider, GOLD_THRESHOLD);
+            let signal = create_test_signal(&env, provider.clone(), 100, 100, 200, Some(100));
+            let score = calculate_quality_score(&env, &signal);
+            assert!(score <= 100);
 
-        // All max values
-        let signal = create_test_signal(&env, provider.clone(), 100, 100, 200, Some(100));
-        let score = calculate_quality_score(&env, &signal);
-        assert!(score <= 100);
-
-        // All min values
-        let signal = create_test_signal(&env, provider.clone(), 0, 0, 0, Some(0));
-        let score = calculate_quality_score(&env, &signal);
-        assert!(score >= 0 && score <= 100);
+            let signal = create_test_signal(&env, provider, 0, 0, 0, Some(0));
+            let score = calculate_quality_score(&env, &signal);
+            assert!(score >= 0 && score <= 100);
+        });
     }
 
     #[test]
     fn test_bronze_stake_tier() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        setup_stake(&env, &provider, BRONZE_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (80 * 0.4) + (50 * 0.2) + (33 * 0.2) + (80 * 0.2)
-        //         = 32 + 10 + 6.6 + 16 = 64.6 ≈ 64
-        assert_eq!(score, 64);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, BRONZE_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 64);
+        });
     }
 
     #[test]
     fn test_silver_stake_tier() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        setup_stake(&env, &provider, SILVER_THRESHOLD);
-        let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (80 * 0.4) + (50 * 0.2) + (66 * 0.2) + (80 * 0.2)
-        //         = 32 + 10 + 13.2 + 16 = 71.2 ≈ 71
-        assert_eq!(score, 71);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            setup_stake(&env, &provider, SILVER_THRESHOLD);
+            let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 71);
+        });
     }
 
     #[test]
     fn test_no_stake() {
-        let env = Env::default();
-        let provider = <Address as TestAddress>::generate(&env);
-
-        // No stake setup
-        let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
-
-        let score = calculate_quality_score(&env, &signal);
-
-        // Expected: (80 * 0.4) + (50 * 0.2) + (0 * 0.2) + (80 * 0.2)
-        //         = 32 + 10 + 0 + 16 = 58
-        assert_eq!(score, 58);
+        with_contract(|env| {
+            let provider = <Address as TestAddress>::generate(&env);
+            let signal = create_test_signal(&env, provider, 10, 8, 50, Some(80));
+            let score = calculate_quality_score(&env, &signal);
+            assert_eq!(score, 58);
+        });
     }
 }

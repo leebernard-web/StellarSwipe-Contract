@@ -115,7 +115,7 @@ fn test_transfer_expiry() {
 
     // Jump forward 48 hours + 1 second (172800 seconds + 1)
     env.ledger().with_mut(|l| {
-        l.timestamp = l.timestamp + 48 * 60 * 60 + 1;
+        l.sequence_number += 34_560 + 1;
     });
 
     // Try to accept after expiry - should fail
@@ -139,36 +139,34 @@ fn test_transfer_expiry_boundary() {
 
     client.initialize(&admin);
 
-    let initial_timestamp = env.ledger().timestamp();
+    let initial_sequence = env.ledger().sequence();
 
     // Propose transfer
     client.propose_admin_transfer(&admin, &new_admin);
 
-    // Jump forward exactly 48 hours
+    // Jump forward exactly 48 hours (still valid at boundary)
     env.ledger().with_mut(|l| {
-        l.timestamp = initial_timestamp + 48 * 60 * 60;
+        l.sequence_number = initial_sequence + 34_560;
     });
 
-    // Try to accept exactly at expiry boundary - should fail
-    let result = client.try_accept_admin_transfer(&new_admin);
-    assert!(
-        result.is_err(),
-        "Acceptance should fail at exact expiry time"
-    );
+    client.accept_admin_transfer(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
 
-    // Go back and try just before expiry
+    // Fresh contract: one ledger past expiry should reject
     let contract_id2 = env.register_contract(None, SignalRegistry);
     let client2 = SignalRegistryClient::new(&env, &contract_id2);
+    let new_admin2 = Address::generate(&env);
 
     client2.initialize(&admin);
-    client2.propose_admin_transfer(&admin, &new_admin);
+    let seq2 = env.ledger().sequence();
+    client2.propose_admin_transfer(&admin, &new_admin2);
 
     env.ledger().with_mut(|l| {
-        l.timestamp = initial_timestamp + 48 * 60 * 60 - 1; // 1 second before expiry
+        l.sequence_number = seq2 + 34_560 + 1;
     });
 
-    // Should succeed just before expiry
-    client2.accept_admin_transfer(&new_admin);
+    let result = client2.try_accept_admin_transfer(&new_admin2);
+    assert!(result.is_err(), "Acceptance should fail after expiry");
 }
 
 #[test]
@@ -342,7 +340,7 @@ fn test_propose_no_pending_cleanup_on_expired() {
 
     // Jump forward 48+ hours
     env.ledger().with_mut(|l| {
-        l.timestamp = initial_timestamp + 48 * 60 * 60 + 1;
+        l.sequence_number += 34_560 + 1;
     });
 
     // Try to accept expired - should fail and clean up

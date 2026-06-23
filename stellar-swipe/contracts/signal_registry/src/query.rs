@@ -385,44 +385,51 @@ mod feed_tests {
         }
     }
 
+    fn with_contract<R>(f: impl FnOnce(&Env) -> R) -> R {
+        let env = Env::default();
+        #[allow(deprecated)]
+        let cid = env.register_contract(None, crate::SignalRegistry);
+        env.as_contract(&cid, || f(&env))
+    }
+
     #[test]
     fn get_active_signals_matches_bubble_historical_all_sorts() {
-        let env = Env::default();
-        // Many param combinations + historical O(n^2) reference can exceed default test budget.
-        env.cost_estimate().budget().reset_unlimited();
-        let map = make_test_map(&env, 50);
-        for sort in [
-            SortOption::RecencyDesc,
-            SortOption::PerformanceDesc,
-            SortOption::VolumeDesc,
-        ] {
-            for off in [0u32, 3, 20] {
-                for lim in [0u32, 10, 25, 100] {
-                    let a = get_active_signals(&env, &map, None, off, lim, sort.clone(), None);
-                    let b = get_active_signals_bubble_historical(
-                        &env, &map, None, off, lim, &sort, None,
-                    );
-                    assert_eq!(a.len(), b.len());
-                    assert_summaries_eq(&a, &b);
+        with_contract(|env| {
+            env.cost_estimate().budget().reset_unlimited();
+            let map = make_test_map(env, 50);
+            for sort in [
+                SortOption::RecencyDesc,
+                SortOption::PerformanceDesc,
+                SortOption::VolumeDesc,
+            ] {
+                for off in [0u32, 3, 20] {
+                    for lim in [0u32, 10, 25, 100] {
+                        let a = get_active_signals(env, &map, None, off, lim, sort.clone(), None);
+                        let b = get_active_signals_bubble_historical(
+                            env, &map, None, off, lim, &sort, None,
+                        );
+                        assert_eq!(a.len(), b.len());
+                        assert_summaries_eq(&a, &b);
+                    }
                 }
             }
-        }
+        });
     }
 
     /// `cost_estimate().budget().cpu_instruction_cost()` (see module header for before/after).
     #[test]
     fn get_active_signals_stays_under_half_default_cpu_budget_50_active() {
-        const DEFAULT_TX_CPU: u64 = 100_000_000;
-        const HALF: u64 = DEFAULT_TX_CPU / 2;
-        let env = Env::default();
-        let map = make_test_map(&env, 50);
-        env.cost_estimate().budget().reset_tracker();
-        let _ = get_active_signals(&env, &map, None, 0, 30, SortOption::RecencyDesc, None);
-        let after = env.cost_estimate().budget().cpu_instruction_cost();
-        // Re-run with `cargo test get_active_signals_stays_under_half -- --nocapture` to log for PRs.
-        assert!(
-            after < HALF,
-            "get_active_signals(50 actives) used {after} insns, expected < {HALF} (50% of {DEFAULT_TX_CPU})"
-        );
+        with_contract(|env| {
+            const DEFAULT_TX_CPU: u64 = 100_000_000;
+            const HALF: u64 = DEFAULT_TX_CPU / 2;
+            let map = make_test_map(env, 50);
+            env.cost_estimate().budget().reset_tracker();
+            let _ = get_active_signals(env, &map, None, 0, 30, SortOption::RecencyDesc, None);
+            let after = env.cost_estimate().budget().cpu_instruction_cost();
+            assert!(
+                after < HALF,
+                "get_active_signals(50 actives) used {after} insns, expected < {HALF} (50% of {DEFAULT_TX_CPU})"
+            );
+        });
     }
 }

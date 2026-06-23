@@ -390,7 +390,7 @@ pub fn update_provider_outcomes(profile: &mut ProviderProfile, outcome: Outcome)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as TestAddress, Env, Map};
+    use soroban_sdk::{testutils::Address as TestAddress, testutils::Ledger, Env, Map};
 
     fn sdk_string(env: &Env, s: &str) -> String {
         #[allow(deprecated)]
@@ -513,6 +513,7 @@ mod tests {
     #[test]
     fn test_expired_signal_not_duplicate() {
         let env = Env::default();
+        env.ledger().set_timestamp(10_000);
         let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
@@ -636,6 +637,7 @@ mod tests {
     #[test]
     fn test_old_signal_not_duplicate() {
         let env = Env::default();
+        env.ledger().set_timestamp(10_000);
         let mut storage: Map<u64, SubmissionSignal> = Map::new(&env);
         let provider = <Address as TestAddress>::generate(&env);
 
@@ -837,26 +839,8 @@ mod tests {
 
     #[test]
     fn test_check_price_reasonableness_with_mock_oracle_within_range() {
-        let env = Env::default();
-
-        // Set up mock oracle price
-        use soroban_sdk::Symbol;
-        use stellar_swipe_common::oracle::{MockOracleClient, OraclePrice};
-
-        let oracle_price = OraclePrice {
-            price: 100_000_000,
-            decimals: 0,
-            timestamp: env.ledger().timestamp(),
-            source: Symbol::new(&env, "test"),
-        };
-
-        MockOracleClient::set_price(&env, 1, oracle_price);
-
         // Signal price within 20% (110 vs 100)
         let signal_price = 110_000_000;
-
-        // Note: This test would need the MockOracleClient to be used instead of OnChainOracleClient
-        // For now, we test the is_price_reasonable function directly
         assert!(is_price_reasonable(signal_price, 100_000_000));
     }
 

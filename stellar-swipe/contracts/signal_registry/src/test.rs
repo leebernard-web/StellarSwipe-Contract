@@ -728,11 +728,11 @@ fn test_cleanup_batch_limit() {
     use soroban_sdk::testutils::Ledger;
     env.ledger().set_timestamp(10000);
 
-    let provider = Address::generate(&env);
+    // Create 150 expired signals (unique providers avoid signal-submission rate limits)
     let current_time = env.ledger().timestamp();
-
-    // Create 150 expired signals
-    for _ in 0..150 {
+    for _i in 0..150 {
+        let provider = Address::generate(&env);
+        client.stake_tokens(&provider, &1_000_000_000i128);
         client.create_signal(
             &provider,
             &String::from_str(&env, "XLM/USDC"),

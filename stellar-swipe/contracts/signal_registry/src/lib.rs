@@ -770,6 +770,7 @@ impl SignalRegistry {
     ) -> Result<u64, AdminError> {
         // Check if signals are paused
         admin::require_not_paused(env, String::from_str(env, CAT_SIGNALS))?;
+        admin::require_not_paused(env, String::from_str(env, CAT_TRADING))?;
 
         // Issue #424: Banned providers cannot submit signals
         if providers::is_provider_banned(env, &provider) {
@@ -914,6 +915,12 @@ impl SignalRegistry {
 
         // Check for expiry warning (Issue #417)
         let now = env.ledger().timestamp();
+        if signal.status == SignalStatus::Active && crate::expiry::is_expired(&env, &signal) {
+            crate::expiry::check_and_update_expiry(&env, &mut signal);
+            signals.set(signal_id, signal.clone());
+            Self::save_signals_map(&env, &signals);
+        }
+
         let time_to_expiry = signal.expiry.saturating_sub(now);
         if time_to_expiry <= WARNING_WINDOW_LEDGERS && !signal.warning_emitted {
             events::emit_signal_expiry_warning(

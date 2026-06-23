@@ -30,8 +30,8 @@ pub fn get_provider_monthly_report(
     let month_start = calculate_month_start(month, year);
     let month_end = month_start + SECONDS_PER_MONTH;
 
-    for i in 0..signals_map.len() {
-        if let Some(signal) = signals_map.get(i as u64) {
+    for key in signals_map.keys() {
+        if let Some(signal) = signals_map.get(key) {
             if signal.provider != *provider {
                 continue;
             }

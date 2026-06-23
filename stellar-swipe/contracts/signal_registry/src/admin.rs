@@ -504,7 +504,7 @@ pub fn pause_trading(env: &Env, caller: &Address) -> Result<(), AdminError> {
         env,
         caller,
         String::from_str(env, CAT_TRADING),
-        None,
+        Some(48 * 60 * 60),
         String::from_str(env, "Manual pause"),
     )
 }

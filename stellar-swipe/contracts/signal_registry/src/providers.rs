@@ -425,81 +425,91 @@ mod tests {
 
     // ── Profile tests ──────────────────────────────────────────────────────
 
+    fn with_contract<R>(f: impl FnOnce(&Env) -> R) -> R {
+        let env = Env::default();
+        #[allow(deprecated)]
+        let cid = env.register_contract(None, crate::SignalRegistry);
+        env.as_contract(&cid, || f(&env))
+    }
+
     #[test]
     fn profile_created_on_first_stake() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let s = stats(25, 7_000);
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let s = stats(25, 7_000);
 
-        let profile = create_or_update_provider_profile(
-            &env,
-            provider.clone(),
-            String::from_str(&env, "abc123"),
-            String::from_str(&env, "bio456"),
-            &s,
-            GOLD_TIER_STAKE,
-            false,
-        );
+            let profile = create_or_update_provider_profile(
+                &env,
+                provider.clone(),
+                String::from_str(&env, "abc123"),
+                String::from_str(&env, "bio456"),
+                &s,
+                GOLD_TIER_STAKE,
+                false,
+            );
 
-        assert_eq!(profile.total_signals, 25);
-        assert_eq!(profile.stake_tier, 3);
-        assert!(!profile.verified);
+            assert_eq!(profile.total_signals, 25);
+            assert_eq!(profile.stake_tier, 3);
+            assert!(!profile.verified);
 
-        let stored = get_provider_profile(&env, &provider).unwrap();
-        assert_eq!(stored.display_name_hash, String::from_str(&env, "abc123"));
+            let stored = get_provider_profile(&env, &provider).unwrap();
+            assert_eq!(stored.display_name_hash, String::from_str(&env, "abc123"));
+        });
     }
 
     #[test]
     fn profile_update_preserves_created_at() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let s = stats(10, 5_000);
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let s = stats(10, 5_000);
 
-        let first = create_or_update_provider_profile(
-            &env,
-            provider.clone(),
-            String::from_str(&env, "hash1"),
-            String::from_str(&env, "bio1"),
-            &s,
-            0,
-            false,
-        );
+            let first = create_or_update_provider_profile(
+                &env,
+                provider.clone(),
+                String::from_str(&env, "hash1"),
+                String::from_str(&env, "bio1"),
+                &s,
+                0,
+                false,
+            );
 
-        let second = create_or_update_provider_profile(
-            &env,
-            provider.clone(),
-            String::from_str(&env, "hash2"),
-            String::from_str(&env, "bio2"),
-            &s,
-            0,
-            true,
-        );
+            let second = create_or_update_provider_profile(
+                &env,
+                provider.clone(),
+                String::from_str(&env, "hash2"),
+                String::from_str(&env, "bio2"),
+                &s,
+                0,
+                true,
+            );
 
-        assert_eq!(first.created_at, second.created_at);
-        assert_eq!(second.display_name_hash, String::from_str(&env, "hash2"));
-        assert!(second.verified);
+            assert_eq!(first.created_at, second.created_at);
+            assert_eq!(second.display_name_hash, String::from_str(&env, "hash2"));
+            assert!(second.verified);
+        });
     }
 
     #[test]
     fn profile_readable_by_anyone() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let s = stats(5, 4_000);
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let s = stats(5, 4_000);
 
-        create_or_update_provider_profile(
-            &env,
-            provider.clone(),
-            String::from_str(&env, "h"),
-            String::from_str(&env, "b"),
-            &s,
-            0,
-            false,
-        );
+            create_or_update_provider_profile(
+                &env,
+                provider.clone(),
+                String::from_str(&env, "h"),
+                String::from_str(&env, "b"),
+                &s,
+                0,
+                false,
+            );
 
-        // Any address can read
-        let reader = Address::generate(&env);
-        let _ = reader; // just to show it's a different address
-        assert!(get_provider_profile(&env, &provider).is_some());
+            // Any address can read
+            let reader = Address::generate(&env);
+            let _ = reader;
+            assert!(get_provider_profile(&env, &provider).is_some());
+        });
     }
 
     // ── Appeal tests ───────────────────────────────────────────────────────
@@ -518,76 +528,80 @@ mod tests {
 
     #[test]
     fn appeal_submission_creates_governance_proposal() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
 
-        let appeal =
-            submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
+            let appeal =
+                submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
 
-        assert_eq!(appeal.governance_proposal_id, 42);
-        assert_eq!(appeal.status, AppealStatus::Pending);
+            assert_eq!(appeal.governance_proposal_id, 42);
+            assert_eq!(appeal.status, AppealStatus::Pending);
 
-        let stored = get_ban_appeal(&env, &provider).unwrap();
-        assert_eq!(stored.governance_proposal_id, 42);
+            let stored = get_ban_appeal(&env, &provider).unwrap();
+            assert_eq!(stored.governance_proposal_id, 42);
+        });
     }
 
     #[test]
     fn governance_reversal_restores_provider_status_and_stake() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
 
-        // Create profile first
-        let s = stats(25, 7_000);
-        create_or_update_provider_profile(
-            &env,
-            provider.clone(),
-            String::from_str(&env, "h"),
-            String::from_str(&env, "b"),
-            &s,
-            GOLD_TIER_STAKE,
-            false, // banned → verified=false
-        );
+            // Create profile first
+            let s = stats(25, 7_000);
+            create_or_update_provider_profile(
+                &env,
+                provider.clone(),
+                String::from_str(&env, "h"),
+                String::from_str(&env, "b"),
+                &s,
+                GOLD_TIER_STAKE,
+                false, // banned → verified=false
+            );
 
-        submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
-        reverse_ban(&env, provider.clone(), stub_return_stake).unwrap();
+            submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
+            reverse_ban(&env, provider.clone(), stub_return_stake).unwrap();
 
-        let appeal = get_ban_appeal(&env, &provider).unwrap();
-        assert_eq!(appeal.status, AppealStatus::Approved);
+            let appeal = get_ban_appeal(&env, &provider).unwrap();
+            assert_eq!(appeal.status, AppealStatus::Approved);
 
-        let profile = get_provider_profile(&env, &provider).unwrap();
-        assert!(profile.verified);
+            let profile = get_provider_profile(&env, &provider).unwrap();
+            assert!(profile.verified);
+        });
     }
 
     #[test]
     fn governance_rejection_sets_rejected_status() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
 
-        submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
-        reject_ban_appeal(&env, provider.clone()).unwrap();
+            submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal).unwrap();
+            reject_ban_appeal(&env, provider.clone()).unwrap();
 
-        let appeal = get_ban_appeal(&env, &provider).unwrap();
-        assert_eq!(appeal.status, AppealStatus::Rejected);
+            let appeal = get_ban_appeal(&env, &provider).unwrap();
+            assert_eq!(appeal.status, AppealStatus::Rejected);
+        });
     }
 
     #[test]
     fn duplicate_pending_appeal_rejected() {
-        let env = Env::default();
-        let provider = Address::generate(&env);
-        let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
+        with_contract(|env| {
+            let provider = Address::generate(&env);
+            let evidence = Bytes::from_slice(&env, b"ipfs://evidence");
 
-        submit_ban_appeal(
-            &env,
-            provider.clone(),
-            evidence.clone(),
-            stub_create_proposal,
-        )
-        .unwrap();
-        let result = submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal);
-        assert_eq!(result, Err(AppealError::AppealAlreadyPending));
+            submit_ban_appeal(
+                &env,
+                provider.clone(),
+                evidence.clone(),
+                stub_create_proposal,
+            )
+            .unwrap();
+            let result = submit_ban_appeal(&env, provider.clone(), evidence, stub_create_proposal);
+            assert_eq!(result, Err(AppealError::AppealAlreadyPending));
+        });
     }
 
     // ── Existing eligibility tests ─────────────────────────────────────────

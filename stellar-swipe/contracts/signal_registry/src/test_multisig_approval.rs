@@ -132,7 +132,7 @@ fn test_guardian_emergency_pause_bypasses_multisig() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, signer1, _, _, _) = setup_multisig_client(&env);
+    let (client, signer1, signer2, _, _) = setup_multisig_client(&env);
     let guardian = Address::generate(&env);
 
     let mut config = MultisigTimelockConfig::default_config();
@@ -143,8 +143,8 @@ fn test_guardian_emergency_pause_bypasses_multisig() {
         &signer1,
         &CriticalActionPayload::SetGuardian(guardian.clone()),
     );
-    client.approve_proposal(&signer1, &proposal_id);
-    client.execute_proposal(&signer1, &proposal_id);
+    client.approve_proposal(&signer2, &proposal_id);
+    client.execute_proposal(&signer2, &proposal_id);
 
     client.pause_trading(&guardian);
     assert!(client.is_paused());
