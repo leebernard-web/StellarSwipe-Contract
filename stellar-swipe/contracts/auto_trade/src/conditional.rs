@@ -396,8 +396,8 @@ pub fn mark_executed(env: &Env, id: u64) -> Result<(), AutoTradeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AutoTradeContract, AutoTradeContractClient};
     use crate::risk::RiskDataKey;
+    use crate::{AutoTradeContract, AutoTradeContractClient};
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},
         Address, Env,

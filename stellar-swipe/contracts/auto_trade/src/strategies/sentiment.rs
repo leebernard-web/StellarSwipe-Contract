@@ -955,9 +955,8 @@ mod tests {
         });
 
         with_contract(&env, || {
-            let result = create_sentiment_strategy(
-                &env, user, asset_pair, sources, 9500, true, 2000, 24,
-            );
+            let result =
+                create_sentiment_strategy(&env, user, asset_pair, sources, 9500, true, 2000, 24);
             assert!(result.is_err());
         });
     }
@@ -1016,10 +1015,9 @@ mod tests {
         let sources = create_test_sources(&env);
 
         with_contract(&env, || {
-            let strategy_id = create_sentiment_strategy(
-                &env, user, asset_pair, sources, 3000, false, 2000, 24,
-            )
-            .unwrap();
+            let strategy_id =
+                create_sentiment_strategy(&env, user, asset_pair, sources, 3000, false, 2000, 24)
+                    .unwrap();
 
             let signal = check_sentiment_signal(&env, strategy_id).unwrap();
 
@@ -1172,9 +1170,9 @@ mod tests {
         env.mock_all_auths();
         let contract = env.register(TestContract, ());
         env.as_contract(&contract, || {
-                    assert_eq!(clamp(5000, 0, 10000), 5000);
-                    assert_eq!(clamp(-1000, 0, 10000), 0);
-                    assert_eq!(clamp(15000, 0, 10000), 10000);
+            assert_eq!(clamp(5000, 0, 10000), 5000);
+            assert_eq!(clamp(-1000, 0, 10000), 0);
+            assert_eq!(clamp(15000, 0, 10000), 10000);
         });
     }
 
@@ -1185,12 +1183,12 @@ mod tests {
         env.mock_all_auths();
         let contract = env.register(TestContract, ());
         env.as_contract(&contract, || {
-                    assert_eq!(sqrt(0), 0);
-                    assert_eq!(sqrt(1), 1);
-                    assert_eq!(sqrt(4), 2);
-                    assert_eq!(sqrt(9), 3);
-                    assert_eq!(sqrt(16), 4);
-                    assert_eq!(sqrt(100), 10);
+            assert_eq!(sqrt(0), 0);
+            assert_eq!(sqrt(1), 1);
+            assert_eq!(sqrt(4), 2);
+            assert_eq!(sqrt(9), 3);
+            assert_eq!(sqrt(16), 4);
+            assert_eq!(sqrt(100), 10);
         });
     }
 }
