@@ -65,7 +65,6 @@ pub fn set_expected_wasm_hash(env: &Env, contract_id: &Address, hash: &BytesN<32
 pub fn verify_wasm_hash(env: &Env, contract_id: &Address) -> Result<(), WasmHashError> {
     #[cfg(any(test, feature = "testutils"))]
     {
-        use soroban_sdk::testutils::Deployer;
         let expected: BytesN<32> = env
             .storage()
             .instance()
@@ -108,7 +107,7 @@ pub fn check_call_depth(call_depth: u32) -> Result<u32, CallDepthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Deployer, Ledger};
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
 
     #[contract]

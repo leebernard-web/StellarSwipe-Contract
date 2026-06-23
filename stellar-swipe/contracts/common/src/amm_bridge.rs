@@ -389,7 +389,7 @@ mod tests {
 
         let plan = plan_multi_source_route(&env, &quotes, 80_000, 100, 1_000).unwrap();
         assert_eq!(plan.amount_in, 80_000);
-        assert!(plan.segments.len() >= 1);
+        assert!(!plan.segments.is_empty());
     }
 
     #[test]

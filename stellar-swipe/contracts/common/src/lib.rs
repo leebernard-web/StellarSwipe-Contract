@@ -1,15 +1,19 @@
 #![no_std]
 
+#[allow(deprecated)]
 pub mod amm_bridge;
 pub mod assets;
 pub mod commit_reveal;
 pub mod constants;
 pub mod emergency;
 pub mod health;
+#[allow(deprecated)]
 pub mod multisig;
 pub mod oracle;
 pub mod perf;
+#[allow(deprecated)]
 pub mod rate_limit;
+#[allow(deprecated)]
 pub mod replay_protection;
 
 pub use amm_bridge::{
@@ -51,7 +55,7 @@ pub use perf::{
 };
 pub use rate_limit::{
     check_rate_limit, record_action, set_config as set_rate_limit_config, ActionType,
-    RateLimitConfig,
+    RateLimitConfig, RateLimitError,
 };
 pub use replay_protection::{current_nonce, verify_and_commit, ReplayError};
 

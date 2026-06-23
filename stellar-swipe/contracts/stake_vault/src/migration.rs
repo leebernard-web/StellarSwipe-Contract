@@ -300,7 +300,7 @@ pub fn migrate_stakes_v1_to_v2(
 
     // Complete only when every V1 provider is migrated and recovery queue is clear.
     let all_accounted = state.migrated.len() + state.pending_recovery.len() >= total_v1;
-    state.complete = all_accounted && state.pending_recovery.len() == 0;
+    state.complete = all_accounted && state.pending_recovery.is_empty();
 
     save_v2(env, &v2);
     save_state(env, &state);
@@ -369,7 +369,7 @@ pub fn recover_migration_entry(
 
     let total_v1 = state.total_v1_providers;
     let all_accounted = state.migrated.len() + state.pending_recovery.len() >= total_v1;
-    state.complete = all_accounted && state.pending_recovery.len() == 0;
+    state.complete = all_accounted && state.pending_recovery.is_empty();
 
     let remaining_recovery = state.pending_recovery.len();
     let migration_complete = state.complete;

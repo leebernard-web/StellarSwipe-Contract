@@ -1,9 +1,7 @@
-#![no_std]
-
-use crate::auth::{check_call_depth, verify_wasm_hash, MAX_CALL_DEPTH};
+use crate::auth::{check_call_depth, verify_wasm_hash};
 use crate::version::check_compatible;
 use soroban_sdk::{
-    contractclient, contracterror, contracttype, Address, Bytes, Env, String, Symbol, Vec,
+    contractclient, contracterror, contracttype, Address, Bytes, Env, String, Symbol,
 };
 
 pub const MAX_MESSAGE_SIZE: u32 = 2048;
@@ -147,7 +145,7 @@ pub fn validate_callee_version(
     check_compatible(version, kind).map_err(|_| CrossContractError::VersionMismatch)
 }
 
-pub fn validate_payload(env: &Env, payload: &Bytes) -> Result<(), CrossContractError> {
+pub fn validate_payload(_env: &Env, payload: &Bytes) -> Result<(), CrossContractError> {
     if payload.len() > MAX_MESSAGE_SIZE {
         Err(CrossContractError::InvalidPayload)
     } else {
@@ -166,8 +164,7 @@ pub fn send_cross_contract_message(
 ) -> Result<u64, CrossContractError> {
     sender.require_auth();
     validate_payload(env, &payload)?;
-    let next_depth =
-        check_call_depth(call_depth).map_err(|_| CrossContractError::CallDepthExceeded)?;
+    check_call_depth(call_depth).map_err(|_| CrossContractError::CallDepthExceeded)?;
 
     let id = next_message_id(env);
     let now = env.ledger().timestamp();
@@ -227,6 +224,7 @@ pub fn reject_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::MAX_CALL_DEPTH;
     use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
 
     #[contract]
@@ -234,7 +232,7 @@ mod tests {
 
     #[contractimpl]
     impl VersionedContract {
-        pub fn get_contract_version(env: Env) -> u32 {
+        pub fn get_contract_version(_env: Env) -> u32 {
             1u32
         }
     }

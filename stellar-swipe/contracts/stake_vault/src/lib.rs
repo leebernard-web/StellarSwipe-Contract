@@ -53,6 +53,7 @@ fn emit_provider_tier_change(
         "provider_tier_downgraded"
     };
 
+    #[allow(deprecated)]
     env.events().publish(
         (Symbol::new(env, topic),),
         (provider.clone(), old_tier, new_tier, stake_balance),
@@ -131,6 +132,7 @@ impl StakeVaultContract {
             .expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Paused, &true);
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),
@@ -149,6 +151,7 @@ impl StakeVaultContract {
             .expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Paused, &false);
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),
@@ -239,7 +242,7 @@ impl StakeVaultContract {
         // Transfer tokens into the vault (after state update — CEI pattern).
         token::Client::new(&env, &token).transfer(
             &staker,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
@@ -285,6 +288,7 @@ impl StakeVaultContract {
             let now = env.ledger().timestamp();
             env.storage().persistent().set(&key, &now);
 
+            #[allow(deprecated)]
             env.events().publish(
                 (
                     Symbol::new(&env, "stake_vault"),
@@ -356,6 +360,7 @@ impl StakeVaultContract {
             &now,
         );
 
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),
@@ -437,6 +442,7 @@ impl StakeVaultContract {
             .unwrap_or(0);
         if last_stake_ledger == current_ledger && current_ledger != 0 {
             // Emit alert event for monitoring system.
+            #[allow(deprecated)]
             env.events().publish(
                 (
                     Symbol::new(env, "stake_vault"),
@@ -539,6 +545,7 @@ impl StakeVaultContract {
             .persistent()
             .set(&MigrationKey::StakesV2, &stakes);
 
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "stake_vault"),
