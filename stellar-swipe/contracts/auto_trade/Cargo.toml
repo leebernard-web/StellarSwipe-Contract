@@ -39,3 +39,6 @@ name = "test_amm_bridge"
 path = "tests/integration/test_amm_bridge.rs"
 required-features = ["testutils"]
 
+
+[lints]
+workspace = true

@@ -1,9 +1,9 @@
 #![no_std]
 
 pub mod auth;
-pub mod errors;
 #[allow(deprecated)]
 pub mod cross_contract;
+pub mod errors;
 #[allow(deprecated)]
 pub mod events;
 pub mod math;
@@ -14,5 +14,5 @@ pub use cross_contract::{
     CrossContractError, CrossContractMessage, CrossContractMessageReceiverClient,
     CrossContractVersionClient, MessageStatus, MAX_MESSAGE_SIZE,
 };
-pub use version::{ContractKind, VersionError};
 pub use errors::{ErrorCategory, RecoveryStrategy};
+pub use version::{ContractKind, VersionError};

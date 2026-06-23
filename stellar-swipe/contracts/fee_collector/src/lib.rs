@@ -31,11 +31,11 @@ use storage::{
     is_initialized, remove_failed_fee_collection, remove_monthly_trade_volume,
     remove_queued_withdrawal, set_admin, set_burn_rate as set_burn_rate_storage,
     set_failed_fee_collection, set_fee_optimization_config, set_fee_rate as set_fee_rate_storage,
-    set_has_traded, set_initialized, set_monthly_trade_volume, set_network_condition_score,
-    set_oracle_contract as set_oracle_contract_storage, set_pending_fees, set_queued_withdrawal,
-    set_treasury_balance, set_last_error_report, ErrorReport, FailedFeeCollection, FeeOptimizationConfig,
-    MonthlyTradeVolume, QueuedWithdrawal, StorageKey, MAX_BURN_RATE_BPS, MAX_FEE_RATE_BPS,
-    MIN_FEE_RATE_BPS,
+    set_has_traded, set_initialized, set_last_error_report, set_monthly_trade_volume,
+    set_network_condition_score, set_oracle_contract as set_oracle_contract_storage,
+    set_pending_fees, set_queued_withdrawal, set_treasury_balance, ErrorReport,
+    FailedFeeCollection, FeeOptimizationConfig, MonthlyTradeVolume, QueuedWithdrawal, StorageKey,
+    MAX_BURN_RATE_BPS, MAX_FEE_RATE_BPS, MIN_FEE_RATE_BPS,
 };
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec};

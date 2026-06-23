@@ -808,6 +808,7 @@ dependencies = [
  "signal_registry",
  "soroban-sdk",
  "stake_vault",
+ "stellar_swipe_common",
 ]
 
 [[package]]
