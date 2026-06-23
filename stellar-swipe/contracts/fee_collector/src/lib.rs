@@ -257,6 +257,9 @@ impl FeeCollector {
             return Err(ContractError::InsufficientTreasuryBalance);
         }
         let queued_at = env.ledger().timestamp();
+        let available_at = queued_at
+            .checked_add(SECONDS_PER_DAY)
+            .ok_or(ContractError::ArithmeticOverflow)?;
         set_queued_withdrawal(
             &env,
             &QueuedWithdrawal {
@@ -272,7 +275,7 @@ impl FeeCollector {
                 recipient: recipient.clone(),
                 token: token.clone(),
                 amount,
-                available_at: queued_at + SECONDS_PER_DAY,
+                available_at,
             },
         );
         Ok(())
@@ -626,7 +629,7 @@ impl FeeCollector {
         if !has_traded(&env, &trader) {
             set_has_traded(&env, &trader);
             emit_first_trade_fee_waived(&env, &trader);
-            rebates::record_trade_volume(&env, &trader, &trade_asset, trade_amount)?;
+            let _ = rebates::record_trade_volume(&env, &trader, &trade_asset, trade_amount);
             return Ok(0);
         }
 
