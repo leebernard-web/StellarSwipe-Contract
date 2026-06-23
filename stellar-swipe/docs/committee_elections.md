@@ -27,22 +27,29 @@ managed through four on-chain operations:
 start_committee_election(
     admin,
     committee_id,
-    positions_available,   // u32  — must be 3–max_members
-    duration_days,         // u32  — must be > 0
+    positions_available,   // u32  — must be ≥ 3 and ≤ committee.max_members
+    duration_days,         // u32  — must be ≥ 1
     min_participation,     // u32  — minimum unique valid voters required
     quorum_stake_threshold // i128 — minimum total staked weight required
 )
 ```
 
 `min_participation` and `quorum_stake_threshold` are independent thresholds.
-Set either to `0` to disable that check.
+Set either to `0` to disable that check (not recommended for production).
 
 **Constraints:**
 - `positions_available` must be ≥ 3 and ≤ the committee's `max_members`.
 - `duration_days` must be ≥ 1.
-- `quorum_stake_threshold` must be ≥ 0.
+- `quorum_stake_threshold` must be ≥ 0 (negative values are rejected).
 - A new election cannot be started while a previous one is still active
-  (i.e. before `election_end`).
+  (i.e. before `election_end`).  A failed election is automatically cleared,
+  so a new one can be started immediately after finalization.
+
+**Errors:**
+- `InvalidCommitteeConfig` — any constraint above is violated, or an active
+  election already exists for the committee.
+- `CommitteeNotFound` — `committee_id` does not exist.
+- `CommitteeInactive` / `CommitteeTermEnded` — committee cannot run elections.
 
 ---
 
@@ -51,6 +58,11 @@ Set either to `0` to disable that check.
 Any address with a positive staked balance may nominate a candidate.
 Self-nomination is allowed (nominator and nominee can be the same address).
 Duplicate nominations for the same candidate are silently de-duplicated.
+
+**Errors:**
+- `CommitteeElectionNotFound` — no active election for this committee.
+- `CommitteeElectionNotActive` — nomination window has closed.
+- `Unauthorized` — nominator has no staked balance.
 
 ---
 
@@ -83,7 +95,10 @@ votes are written, and previously recorded valid votes are preserved intact.
 finalize_committee_election(admin, committee_id)
 ```
 
-Can only be called after `election_end`.  Returns an `ElectionResult`:
+Can only be called after `election_end`.  Calling before the deadline returns
+`CommitteeElectionNotActive`.
+
+Returns an `ElectionResult`:
 
 ```rust
 pub struct ElectionResult {
@@ -115,20 +130,61 @@ On any failure variant:
 
 ## Invalid Vote Handling
 
-Invalid ballots are **rejected before being recorded**, not silently accepted
-and later excluded.  This means:
+Invalid ballots operate on a **two-layer** rejection model:
 
-- `election.votes` never contains a ballot for an address that was not staked
-  or for a candidate that was not nominated.
-- `election.votes.len()` reflects only valid, accepted ballots.
-- `result.rejected_votes` counts ballots that were **dropped at finalization
-  time** (e.g. a voter who unstaked after voting but before finalization).
+### Layer 1 — Rejected at cast time
 
-This two-layer approach ensures election state is never corrupted:
-- Ballots with obvious errors are refused at cast time.
-- Ballots that become invalid between cast time and finalization
-  (e.g. voter unstakes) are counted in `rejected_votes` but excluded from
-  tallying and quorum math.
+These ballots never enter `election.votes`:
+
+| Reason | Error returned |
+|--------|---------------|
+| Candidate not on ballot | `InvalidElectionVote` |
+| Voter has no staked balance | `InvalidElectionVote` |
+| Voter already voted | `AlreadyVoted` |
+| Election not active (timing) | `CommitteeElectionNotActive` |
+
+### Layer 2 — Excluded at finalization time
+
+Ballots that were valid when cast but became invalid before finalization
+(e.g. voter fully unstaked after voting) are silently excluded from tallying
+and quorum math.  They are counted in `result.rejected_votes` for auditability.
+
+This two-layer approach guarantees:
+- `election.votes` never contains a zero-weight or phantom ballot.
+- `election.votes.len()` counts only accepted cast-time ballots.
+- `result.valid_votes` counts only ballots that were still valid at finalization.
+- `result.rejected_votes` accounts for every ballot that was dropped at
+  finalization time.
+- The quorum check runs on `valid_votes` / `total_stake_weight`, not on the
+  raw ballot count — so unstaking attacks cannot inflate participation numbers.
+
+---
+
+## Quorum Checks
+
+Quorum is evaluated **after** invalid-ballot exclusion, in this order:
+
+1. **Participation quorum** (`min_participation > 0`)  
+   If `valid_votes < min_participation` → `FailedQuorumParticipation`.
+
+2. **Stake-weight quorum** (`quorum_stake_threshold > 0`)  
+   If `total_stake_weight < quorum_stake_threshold` → `FailedQuorumStake`.
+
+3. **Minimum-winners check**  
+   If fewer than 3 distinct candidates received at least one valid vote →
+   `FailedInsufficientWinners`.
+
+Setting either threshold to `0` disables that specific check.
+
+---
+
+## Winner Selection
+
+Winners are selected by **stake-weighted plurality**: the top
+`positions_available` candidates ranked by accumulated stake weight of their
+voters.  Ties are broken by iteration order (first-nominated wins).
+
+The first winner (`winners[0]`) becomes the new committee chair.
 
 ---
 
@@ -149,6 +205,36 @@ finalize_committee_election(admin, id)
 // → ElectionResult { status: Succeeded, winners: [...], valid_votes: N }
 ```
 
+## Example: Stake-Weight Quorum Failure
+
+```
+// Small-stake voters — total weight below threshold
+start_committee_election(admin, id, 3, 7, min_participation=1, quorum_stake=1_000_000)
+// ... 3 voters with 1_000 stake each (total = 3_000) ...
+finalize_committee_election(admin, id)
+// → ElectionResult {
+//     status: FailedQuorumStake,
+//     valid_votes: 3,
+//     total_stake_weight: 3_000,   // returned for diagnostics
+//     winners: [],
+//   }
+```
+
+## Example: Voter Unstakes After Voting
+
+```
+// voter_b votes then unstakes before finalization
+vote_in_committee_election(id, voter_b, candidate_x)
+unstake(voter_b, full_balance)
+finalize_committee_election(admin, id)
+// → ElectionResult {
+//     valid_votes: N-1,    // voter_b excluded
+//     rejected_votes: 1,   // voter_b counted here
+//     total_stake_weight: weight_without_voter_b,
+//     ...
+//   }
+```
+
 ---
 
 ## Error Reference
@@ -161,3 +247,24 @@ finalize_committee_election(admin, id)
 | `AlreadyVoted` | Voter has already cast a ballot in this election |
 | `InvalidCommitteeConfig` | `positions_available < 3`, `duration_days == 0`, negative `quorum_stake_threshold`, or election already running |
 | `ElectionQuorumNotMet` | Reserved for direct call paths that need a hard error; prefer checking `ElectionResult.status` after `finalize_committee_election` |
+
+---
+
+## Test Coverage
+
+The following test scenarios are implemented in
+`contracts/governance/src/test_committee_elections.rs`:
+
+| Test | What it verifies |
+|------|-----------------|
+| `reject_election_with_too_few_positions` | `positions_available < 3` → `InvalidCommitteeConfig` |
+| `reject_election_with_zero_duration` | `duration_days == 0` → `InvalidCommitteeConfig` |
+| `reject_election_with_negative_quorum_stake_threshold` | Negative threshold → `InvalidCommitteeConfig` |
+| `reject_vote_for_unnominated_candidate` | Unknown candidate → `InvalidElectionVote`; `election.votes` unchanged |
+| `reject_vote_from_unstaked_voter` | Zero-stake voter → `InvalidElectionVote`; `election.votes` unchanged |
+| `reject_duplicate_vote_in_election` | Second ballot → `AlreadyVoted`; first ballot preserved |
+| `reject_finalize_before_deadline` | Early finalization → `CommitteeElectionNotActive` |
+| `election_fails_when_participation_quorum_not_met` | `valid_votes < min_participation` → `FailedQuorumParticipation`; committee unchanged; new election startable |
+| `election_fails_when_stake_quorum_not_met` | `total_stake_weight < threshold` → `FailedQuorumStake`; `total_stake_weight` in result |
+| `finalization_excludes_votes_from_voters_who_unstaked` | Post-vote unstake → excluded from `valid_votes`; counted in `rejected_votes` |
+| `successful_election_with_quorum_checks_installs_winners` | Both quorum params set and met → `Succeeded`; winners installed; chair updated |
