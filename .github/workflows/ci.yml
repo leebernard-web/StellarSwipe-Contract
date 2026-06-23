@@ -55,8 +55,9 @@ jobs:
         run: cd stellar-swipe && cargo test --workspace --all-targets
 
       # Release WASM (workspace [profile.release]) + stellar contract optimize
+      # Prebuilt binary — avoids compiling libdbus-sys from source on ubuntu-latest
       - name: Install Stellar CLI
-        run: cargo install stellar-cli --locked --version 25.2.0
+        uses: stellar/stellar-cli@v25.2.0
 
       - name: Build optimized Soroban WASM
         run: cd stellar-swipe && chmod +x scripts/build.sh && ./scripts/build.sh
