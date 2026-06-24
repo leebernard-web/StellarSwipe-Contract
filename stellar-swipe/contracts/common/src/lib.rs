@@ -61,3 +61,8 @@ pub use replay_protection::{current_nonce, verify_and_commit, ReplayError};
 
 #[cfg(test)]
 mod storage_key_tests;
+
+/// Shared test harness for simulating ledger time advancement.
+/// Gated to test/testutils builds only — zero production overhead.
+#[cfg(any(test, feature = "testutils"))]
+pub mod test_time;

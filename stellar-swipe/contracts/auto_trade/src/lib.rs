@@ -32,6 +32,7 @@ pub mod positions;
 mod rate_limit;
 #[cfg(feature = "testutils")]
 pub mod rate_limit;
+pub mod keeper;
 mod referral;
 mod risk;
 mod risk_parity;
@@ -1838,8 +1839,32 @@ impl AutoTradeContract {
     }
 
     /// Evaluate all active conditional orders; returns ids of newly triggered ones.
-    pub fn check_and_trigger_conditionals(env: Env) -> Vec<u64> {
-        conditional::check_and_trigger(&env)
+    ///
+    /// `keeper` must be a registered keeper address (see `add_keeper` /
+    /// `remove_keeper`). The caller must possess the corresponding private key —
+    /// Soroban's `require_auth` enforces this. Unregistered callers are rejected
+    /// before any trigger-condition evaluation occurs.
+    pub fn check_and_trigger_conditionals(
+        env: Env,
+        keeper: Address,
+    ) -> Result<Vec<u64>, AutoTradeError> {
+        keeper::require_registered_keeper(&env, &keeper)?;
+        Ok(conditional::check_and_trigger(&env))
+    }
+
+    /// Add a keeper address (admin only).
+    pub fn add_keeper(env: Env, admin: Address, keeper: Address) -> Result<(), AutoTradeError> {
+        keeper::add_keeper(&env, &admin, keeper)
+    }
+
+    /// Remove a keeper address (admin only).
+    pub fn remove_keeper(env: Env, admin: Address, keeper: Address) -> Result<(), AutoTradeError> {
+        keeper::remove_keeper(&env, &admin, &keeper)
+    }
+
+    /// List all registered keeper addresses.
+    pub fn list_keepers(env: Env) -> Vec<Address> {
+        keeper::list_keepers(&env)
     }
 
     /// Mark a triggered conditional order as executed (call after trade fill).
