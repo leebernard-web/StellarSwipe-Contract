@@ -241,7 +241,10 @@ pub fn approve_budget(
 
     #[allow(deprecated)]
     env.events().publish(
-        (soroban_sdk::symbol_short!("treasury"), soroban_sdk::symbol_short!("budgapprv")),
+        (
+            soroban_sdk::symbol_short!("treasury"),
+            soroban_sdk::symbol_short!("budgapprv"),
+        ),
         (category, proposal_id, approved_cap, now),
     );
 
@@ -297,7 +300,9 @@ pub fn execute_spend(
 
     // ── Commit all state changes ──────────────────────────────────────────────
     approval.total_drawn = new_drawn;
-    treasury.approved_budgets.set(category.clone(), approval.clone());
+    treasury
+        .approved_budgets
+        .set(category.clone(), approval.clone());
 
     budget.spent = checked_add(budget.spent, amount)?;
     budget.remaining = checked_sub(budget.remaining, amount)?;
@@ -322,7 +327,10 @@ pub fn execute_spend(
     // ── Emit spend event ─────────────────────────────────────────────────────
     #[allow(deprecated)]
     env.events().publish(
-        (soroban_sdk::symbol_short!("treasury"), soroban_sdk::symbol_short!("spend")),
+        (
+            soroban_sdk::symbol_short!("treasury"),
+            soroban_sdk::symbol_short!("spend"),
+        ),
         (
             spend.id,
             recipient,
@@ -838,16 +846,7 @@ mod tests {
         let asset = sample_asset(&env, "USDC");
         treasury.total_value_usd = 300;
         set_asset_balance(&env, &mut treasury, asset.clone(), 300).unwrap();
-        setup_budget_with_approval(
-            &env,
-            &mut treasury,
-            "ops",
-            500,
-            250,
-            30 * 86_400,
-            500,
-            3,
-        );
+        setup_budget_with_approval(&env, &mut treasury, "ops", 500, 250, 30 * 86_400, 500, 3);
         // manually extend period so the auto-renew logic doesn't trip
         let mut b = treasury.budgets.get(String::from_str(&env, "ops")).unwrap();
         b.period_end = 60 * 86_400;
@@ -1133,4 +1132,3 @@ mod tests {
         assert!(!treasury.recurring_payments.get(0).unwrap().active);
     }
 }
-

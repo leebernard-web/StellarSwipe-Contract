@@ -132,8 +132,6 @@ fn issue168_not_owner() {
     assert!(r.is_err());
 }
 
-
-
 #[test]
 fn issue168_field_not_editable_invalid_price_and_rationale() {
     use crate::types::SignalEditInput;
@@ -180,7 +178,6 @@ fn issue168_field_not_editable_invalid_price_and_rationale() {
         .try_update_signal(&provider, &signal_id, &bad_rationale)
         .is_err());
 }
-
 
 #[test]
 fn issue170_first_profit_updates_reputation() {

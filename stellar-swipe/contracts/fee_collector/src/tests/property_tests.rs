@@ -12,7 +12,7 @@ fn setup_contract(env: &Env) -> FeeCollectorClient<'_> {
     let admin = Address::generate(env);
     let contract_id = env.register(FeeCollector, ());
     let client = FeeCollectorClient::new(env, &contract_id);
-    client.initialize(&admin).unwrap();
+    client.initialize(&admin);
     client
 }
 

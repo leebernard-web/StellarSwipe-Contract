@@ -89,7 +89,11 @@ pub struct MigrationRecoveryResult {
 #[derive(Debug, PartialEq)]
 pub enum MigrationError {
     Unauthorized,
-    BalanceMismatch { provider: Address, old: i128, new: i128 },
+    BalanceMismatch {
+        provider: Address,
+        old: i128,
+        new: i128,
+    },
     AlreadyComplete,
     /// Provider is not in `pending_recovery`; nothing to recover.
     NotInRecovery,
@@ -189,16 +193,20 @@ fn emit_batch_progress(
     #[allow(deprecated)]
     env.events().publish(
         (symbol_short!("mig_prog"),),
-        (batch_number, migrated_this_batch, total_migrated, total_v1, pending_recovery_count),
+        (
+            batch_number,
+            migrated_this_batch,
+            total_migrated,
+            total_v1,
+            pending_recovery_count,
+        ),
     );
 }
 
 fn emit_migration_complete(env: &Env, total_migrated: u32) {
     #[allow(deprecated)]
-    env.events().publish(
-        (symbol_short!("mig_done"),),
-        (total_migrated,),
-    );
+    env.events()
+        .publish((symbol_short!("mig_done"),), (total_migrated,));
 }
 
 fn emit_recovery(env: &Env, provider: Address, corrected_balance: i128, remaining_recovery: u32) {
@@ -249,7 +257,12 @@ pub fn migrate_stakes_v1_to_v2(
     }
 
     state.batch_number += 1;
-    emit_batch_start(env, state.batch_number, pending.len(), state.pending_recovery.len());
+    emit_batch_start(
+        env,
+        state.batch_number,
+        pending.len(),
+        state.pending_recovery.len(),
+    );
 
     let to_process = batch_size.min(pending.len());
     let mut migrated_this_batch = 0u32;
@@ -286,9 +299,8 @@ pub fn migrate_stakes_v1_to_v2(
     }
 
     // Complete only when every V1 provider is migrated and recovery queue is clear.
-    let all_accounted =
-        state.migrated.len() + state.pending_recovery.len() >= total_v1;
-    state.complete = all_accounted && state.pending_recovery.len() == 0;
+    let all_accounted = state.migrated.len() + state.pending_recovery.len() >= total_v1;
+    state.complete = all_accounted && state.pending_recovery.is_empty();
 
     save_v2(env, &v2);
     save_state(env, &state);
@@ -298,7 +310,14 @@ pub fn migrate_stakes_v1_to_v2(
     let pending_recovery_count = state.pending_recovery.len();
     let complete = state.complete;
 
-    emit_batch_progress(env, batch_number, migrated_this_batch, total_migrated, total_v1, pending_recovery_count);
+    emit_batch_progress(
+        env,
+        batch_number,
+        migrated_this_batch,
+        total_migrated,
+        total_v1,
+        pending_recovery_count,
+    );
     if complete {
         emit_migration_complete(env, total_migrated);
     }
@@ -349,9 +368,8 @@ pub fn recover_migration_entry(
     state.migrated.push_back(provider.clone());
 
     let total_v1 = state.total_v1_providers;
-    let all_accounted =
-        state.migrated.len() + state.pending_recovery.len() >= total_v1;
-    state.complete = all_accounted && state.pending_recovery.len() == 0;
+    let all_accounted = state.migrated.len() + state.pending_recovery.len() >= total_v1;
+    state.complete = all_accounted && state.pending_recovery.is_empty();
 
     let remaining_recovery = state.pending_recovery.len();
     let migration_complete = state.complete;
@@ -407,6 +425,19 @@ mod tests {
         env
     }
 
+    /// Each migration call needs its own contract frame so `require_auth()` is not
+    /// invoked twice on the same authorized frame.
+    fn run_migrate(
+        env: &Env,
+        contract_addr: &Address,
+        admin: &Address,
+        batch_size: u32,
+    ) -> Result<MigrationBatchResult, MigrationError> {
+        env.as_contract(contract_addr, || {
+            migrate_stakes_v1_to_v2(env, admin, batch_size)
+        })
+    }
+
     /// Seed 50 providers into V1 and migrate them in two batches.
     /// Verifies every balance is preserved exactly and batch_number increments.
     #[test]
@@ -414,40 +445,39 @@ mod tests {
         let env = setup();
         let contract_addr = env.register(TestContract, ());
 
-        env.as_contract(&contract_addr, || {
-            let admin = Address::generate(&env);
-            let mut v1: Map<Address, i128> = Map::new(&env);
+        let admin = Address::generate(&env);
+        let mut v1: Map<Address, i128> = Map::new(&env);
 
-            let mut providers = Vec::new(&env);
-            for i in 0..50u32 {
-                let p = Address::generate(&env);
-                let balance = (i as i128 + 1) * 1_000_000;
-                v1.set(p.clone(), balance);
-                providers.push_back(p);
-            }
-            seed_v1_stakes(&env, v1.clone());
+        let mut providers = Vec::new(&env);
+        for i in 0..50u32 {
+            let p = Address::generate(&env);
+            let balance = (i as i128 + 1) * 1_000_000;
+            v1.set(p.clone(), balance);
+            providers.push_back(p);
+        }
+        env.as_contract(&contract_addr, || seed_v1_stakes(&env, v1.clone()));
 
-            // Batch 1: migrate 30
-            let r1 = migrate_stakes_v1_to_v2(&env, &admin, 30).unwrap();
-            assert_eq!(r1.migrated_this_batch, 30);
-            assert_eq!(r1.batch_number, 1);
-            assert_eq!(r1.pending_recovery_count, 0);
-            assert!(!r1.complete);
+        // Batch 1: migrate 30
+        let r1 = run_migrate(&env, &contract_addr, &admin, 30).unwrap();
+        assert_eq!(r1.migrated_this_batch, 30);
+        assert_eq!(r1.batch_number, 1);
+        assert_eq!(r1.pending_recovery_count, 0);
+        assert!(!r1.complete);
 
-            // Batch 2: migrate remaining 20
-            let r2 = migrate_stakes_v1_to_v2(&env, &admin, 30).unwrap();
-            assert_eq!(r2.migrated_this_batch, 20);
-            assert_eq!(r2.batch_number, 2);
-            assert!(r2.complete);
-            assert_eq!(r2.total_migrated, 50);
+        // Batch 2: migrate remaining 20
+        let r2 = run_migrate(&env, &contract_addr, &admin, 30).unwrap();
+        assert_eq!(r2.migrated_this_batch, 20);
+        assert_eq!(r2.batch_number, 2);
+        assert!(r2.complete);
+        assert_eq!(r2.total_migrated, 50);
 
-            // Verify every balance
-            for i in 0..50u32 {
-                let p = providers.get(i).unwrap();
-                let expected = (i as i128 + 1) * 1_000_000;
-                assert_eq!(get_v2_balance(&env, &p), Some(expected));
-            }
-        });
+        // Verify every balance
+        for i in 0..50u32 {
+            let p = providers.get(i).unwrap();
+            let expected = (i as i128 + 1) * 1_000_000;
+            let balance = env.as_contract(&contract_addr, || get_v2_balance(&env, &p));
+            assert_eq!(balance, Some(expected));
+        }
     }
 
     #[test]
@@ -455,18 +485,16 @@ mod tests {
         let env = setup();
         let contract_addr = env.register(TestContract, ());
 
-        env.as_contract(&contract_addr, || {
-            let admin = Address::generate(&env);
-            let mut v1: Map<Address, i128> = Map::new(&env);
-            let p = Address::generate(&env);
-            v1.set(p.clone(), 500_000_000);
-            seed_v1_stakes(&env, v1);
+        let admin = Address::generate(&env);
+        let mut v1: Map<Address, i128> = Map::new(&env);
+        let p = Address::generate(&env);
+        v1.set(p.clone(), 500_000_000);
+        env.as_contract(&contract_addr, || seed_v1_stakes(&env, v1));
 
-            migrate_stakes_v1_to_v2(&env, &admin, 10).unwrap();
+        run_migrate(&env, &contract_addr, &admin, 10).unwrap();
 
-            // Second call should return AlreadyComplete
-            let err = migrate_stakes_v1_to_v2(&env, &admin, 10).unwrap_err();
-            assert_eq!(err, MigrationError::AlreadyComplete);
-        });
+        // Second call should return AlreadyComplete
+        let err = run_migrate(&env, &contract_addr, &admin, 10).unwrap_err();
+        assert_eq!(err, MigrationError::AlreadyComplete);
     }
 }

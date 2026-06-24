@@ -94,7 +94,9 @@ fn action_type_for_payload(payload: &CriticalActionPayload) -> CriticalActionTyp
         CriticalActionPayload::SetTradeFee(_) => CriticalActionType::FeeChange,
         CriticalActionPayload::SetMinStake(_)
         | CriticalActionPayload::SetRiskDefaults(_, _)
-        | CriticalActionPayload::SetTierSignalLimits(_, _, _) => CriticalActionType::ParameterUpdate,
+        | CriticalActionPayload::SetTierSignalLimits(_, _, _) => {
+            CriticalActionType::ParameterUpdate
+        }
         CriticalActionPayload::PauseCategory(_, _, _) => CriticalActionType::Pause,
         CriticalActionPayload::UnpauseCategory(_) => CriticalActionType::Unpause,
         CriticalActionPayload::SetGuardian(_) => CriticalActionType::SetGuardian,
@@ -170,7 +172,9 @@ fn dispatch_payload(
     let payload = load_payload(env, proposal.id)?;
     match payload {
         CriticalActionPayload::SetTradeFee(fee) => admin::set_trade_fee_direct(env, caller, fee),
-        CriticalActionPayload::SetMinStake(amount) => admin::set_min_stake_direct(env, caller, amount),
+        CriticalActionPayload::SetMinStake(amount) => {
+            admin::set_min_stake_direct(env, caller, amount)
+        }
         CriticalActionPayload::SetRiskDefaults(stop_loss, position_limit) => {
             admin::set_risk_defaults_direct(env, caller, stop_loss, position_limit)
         }
@@ -183,11 +187,15 @@ fn dispatch_payload(
         CriticalActionPayload::SetTierSignalLimits(bronze, silver, gold) => {
             admin::set_tier_signal_limits_direct(env, caller, bronze, silver, gold)
         }
-        CriticalActionPayload::PauseFeeCollection => admin::pause_fee_collection_direct(env, caller),
+        CriticalActionPayload::PauseFeeCollection => {
+            admin::pause_fee_collection_direct(env, caller)
+        }
         CriticalActionPayload::ResumeFeeCollection => {
             admin::resume_fee_collection_direct(env, caller)
         }
-        CriticalActionPayload::SetGuardian(guardian) => admin::set_guardian_direct(env, caller, guardian),
+        CriticalActionPayload::SetGuardian(guardian) => {
+            admin::set_guardian_direct(env, caller, guardian)
+        }
         CriticalActionPayload::ProposeAdminTransfer(new_admin) => {
             admin::propose_admin_transfer_direct(env, caller, new_admin)
         }

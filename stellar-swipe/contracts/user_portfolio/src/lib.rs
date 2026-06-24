@@ -5,20 +5,25 @@
 mod achievements;
 mod badges;
 mod migration;
+mod onboarding;
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod portfolio_tests;
 mod preferences;
 mod queries;
 mod storage;
 mod subscriptions;
 mod watchlist;
-#[cfg(test)]
-#[path = "tests/mod.rs"]
-mod portfolio_tests;
 
 pub use achievements::{Achievement, AchievementType};
 pub use badges::{Badge, BadgeType};
-pub use preferences::{HoldDuration, NotificationPrefs, RiskRating, SignalCategory, SignalAction, SignalSummary, TradingStyle};
+pub use onboarding::OnboardingStatus;
+pub use preferences::{
+    HoldDuration, NotificationPrefs, RiskRating, SignalAction, SignalCategory, SignalSummary,
+    TradingStyle,
+};
 
-use soroban_sdk::{contract, contractimpl, contracterror, contracttype, Address, Env, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 use storage::DataKey;
 
 pub use subscriptions::SubscriptionError;
@@ -276,6 +281,18 @@ impl UserPortfolio {
         onboarding::emit_onboarding_status_updated(&env, user, status, milestone);
     }
 
+    /// Admin: enqueue users for V1 → V2 portfolio layout migration.
+    pub fn register_migration_users(env: Env, users: Vec<Address>) {
+        Self::require_admin(&env);
+        migration::register_migration_users(&env, &users);
+    }
+
+    /// Admin: migrate up to `batch_size` queued users from V1 to V2 layout.
+    pub fn migrate_portfolio_v1_to_v2(env: Env, batch_size: u32) -> u32 {
+        Self::require_admin(&env);
+        migration::migrate_batch(&env, batch_size)
+    }
+
     /// Opens a position for `user` (caller must be `user`). `amount` is invested notional at entry.
     pub fn open_position(env: Env, user: Address, entry_price: i128, amount: i128) -> u64 {
         user.require_auth();
@@ -447,16 +464,8 @@ impl UserPortfolio {
         let current_key = DataKey::CurrentStreak(user.clone());
         let best_key = DataKey::BestStreak(user.clone());
 
-        let mut current: u32 = env
-            .storage()
-            .persistent()
-            .get(&current_key)
-            .unwrap_or(0u32);
-        let mut best: u32 = env
-            .storage()
-            .persistent()
-            .get(&best_key)
-            .unwrap_or(0u32);
+        let mut current: u32 = env.storage().persistent().get(&current_key).unwrap_or(0u32);
+        let mut best: u32 = env.storage().persistent().get(&best_key).unwrap_or(0u32);
 
         if realized_pnl > 0 {
             // profitable close: increment streak
@@ -647,11 +656,7 @@ impl UserPortfolio {
     // ── Issue #430: Notification Preferences ─────────────────────────────────
 
     /// Store notification preferences for `user`. Caller must be `user`.
-    pub fn set_notification_preferences(
-        env: Env,
-        user: Address,
-        prefs: NotificationPrefs,
-    ) {
+    pub fn set_notification_preferences(env: Env, user: Address, prefs: NotificationPrefs) {
         preferences::set_notification_preferences(&env, &user, prefs);
     }
 
@@ -755,8 +760,8 @@ impl UserPortfolio {
 
 #[cfg(test)]
 mod streak_tests {
-    use super::*;
     use super::oracle_ok::OracleMock;
+    use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Env, Symbol};
 
@@ -778,26 +783,25 @@ mod streak_tests {
         let user = Address::generate(&env);
 
         // Open and close three profitable positions
+        let provider = Address::generate(&env);
         for _ in 0..3 {
             let id = client.open_position(&user, &100, &1_000);
-            client.close_position(&user, &id, &50, &120, &Address::generate(&env), &1);
+            client.close_position(&user, &id, &50, &120, &1u32, &provider, &1u64);
         }
 
         // Check stored streaks
-        let current: u32 = env
-            .as_contract(&contract_id, || {
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::CurrentStreak(user.clone()))
-                    .unwrap_or(0u32)
-            });
-        let best: u32 = env
-            .as_contract(&contract_id, || {
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::BestStreak(user.clone()))
-                    .unwrap_or(0u32)
-            });
+        let current: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::CurrentStreak(user.clone()))
+                .unwrap_or(0u32)
+        });
+        let best: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::BestStreak(user.clone()))
+                .unwrap_or(0u32)
+        });
 
         assert_eq!(current, 3);
         assert_eq!(best, 3);
@@ -805,41 +809,26 @@ mod streak_tests {
 
     #[test]
     fn streak_breaking_emits_event_and_resets() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::TryFromVal;
+
         let env = Env::default();
         let (_admin, contract_id) = setup(&env);
         let client = UserPortfolioClient::new(&env, &contract_id);
         let user = Address::generate(&env);
+        let provider = Address::generate(&env);
 
         // Build streak of 2
         for _ in 0..2 {
             let id = client.open_position(&user, &100, &1_000);
-            client.close_position(&user, &id, &50, &120, &Address::generate(&env), &1);
+            client.close_position(&user, &id, &50, &120, &1u32, &provider, &1u64);
         }
 
         // Now close with a loss
         let id = client.open_position(&user, &100, &1_000);
-        client.close_position(&user, &id, &0, &80, &Address::generate(&env), &1);
+        client.close_position(&user, &id, &-50, &80, &1u32, &provider, &1u64);
 
-        // current should be 0, best should be 2
-        let current: u32 = env
-            .as_contract(&contract_id, || {
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::CurrentStreak(user.clone()))
-                    .unwrap_or(0u32)
-            });
-        let best: u32 = env
-            .as_contract(&contract_id, || {
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::BestStreak(user.clone()))
-                    .unwrap_or(0u32)
-            });
-
-        assert_eq!(current, 0);
-        assert_eq!(best, 2);
-
-        // Check that a StreakBroken event was emitted
+        // Check events before any other contract frame (env.events().all() is per-frame).
         let has_broken = env.events().all().iter().any(|e| {
             let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
             if topics.len() < 2 {
@@ -850,6 +839,23 @@ mod streak_tests {
                 .unwrap_or(false)
         });
         assert!(has_broken, "streak_broken event not emitted");
+
+        // current should be 0, best should be 2
+        let current: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::CurrentStreak(user.clone()))
+                .unwrap_or(0u32)
+        });
+        let best: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::BestStreak(user.clone()))
+                .unwrap_or(0u32)
+        });
+
+        assert_eq!(current, 0);
+        assert_eq!(best, 2);
     }
 }
 
@@ -994,6 +1000,24 @@ mod migration_tests {
     use super::*;
     use crate::storage::DataKey;
     use soroban_sdk::testutils::Address as _;
+    use stellar_swipe_common::OraclePrice;
+
+    fn close_test_position(env: &Env, client: &UserPortfolioClient, user: &Address, id: u64) {
+        let provider = Address::generate(env);
+        client.close_position(user, &id, &50, &110i128, &1u32, &provider, &0u64);
+    }
+
+    fn seed_oracle_price(env: &Env, oracle_id: &Address) {
+        OracleMockClient::new(env, oracle_id).set_price(
+            &1u32,
+            &OraclePrice {
+                price: 100i128,
+                decimals: 7,
+                timestamp: 0,
+                source: soroban_sdk::symbol_short!("mock"),
+            },
+        );
+    }
 
     /// 20 users × 5 open + 10 closed positions each.
     /// Verifies all positions are preserved after V1 → V2 migration.
@@ -1004,7 +1028,7 @@ mod migration_tests {
 
         let admin = Address::generate(&env);
         let oracle_id = env.register_contract(None, OracleMock);
-        OracleMockClient::new(&env, &oracle_id).set_price(&100);
+        seed_oracle_price(&env, &oracle_id);
         let contract_id = env.register_contract(None, UserPortfolio);
         let client = UserPortfolioClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
@@ -1026,7 +1050,7 @@ mod migration_tests {
             // Close the last CLOSED of them.
             for i in OPEN..(OPEN + CLOSED) {
                 let id = all_ids.get(i as u32).unwrap();
-                client.close_position(&user, &id, &50);
+                close_test_position(&env, &client, &user, id);
             }
 
             users.push_back(user);
@@ -1041,20 +1065,18 @@ mod migration_tests {
         for i in 0..USERS {
             let user = users.get(i as u32).unwrap();
 
-            let open_ids: soroban_sdk::Vec<u64> = env
-                .as_contract(&contract_id, || {
-                    env.storage()
-                        .persistent()
-                        .get(&DataKey::UserOpenPositions(user.clone()))
-                        .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
-                });
-            let closed_ids: soroban_sdk::Vec<u64> = env
-                .as_contract(&contract_id, || {
-                    env.storage()
-                        .persistent()
-                        .get(&DataKey::UserClosedPositions(user.clone()))
-                        .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
-                });
+            let open_ids: soroban_sdk::Vec<u64> = env.as_contract(&contract_id, || {
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::UserOpenPositions(user.clone()))
+                    .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+            });
+            let closed_ids: soroban_sdk::Vec<u64> = env.as_contract(&contract_id, || {
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::UserClosedPositions(user.clone()))
+                    .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+            });
 
             assert_eq!(open_ids.len(), OPEN as u32, "user {i}: open count mismatch");
             assert_eq!(
@@ -1097,14 +1119,14 @@ mod migration_tests {
 
         let admin = Address::generate(&env);
         let oracle_id = env.register_contract(None, OracleMock);
-        OracleMockClient::new(&env, &oracle_id).set_price(&100);
+        seed_oracle_price(&env, &oracle_id);
         let contract_id = env.register_contract(None, UserPortfolio);
         let client = UserPortfolioClient::new(&env, &contract_id);
         client.initialize(&admin, &oracle_id);
 
         let user = Address::generate(&env);
         client.open_position(&user, &100, &1_000);
-        client.close_position(&user, &1, &50);
+        close_test_position(&env, &client, &user, 1);
 
         let mut users: Vec<Address> = Vec::new(&env);
         users.push_back(user.clone());
@@ -1609,15 +1631,11 @@ mod tests {
         client.open_position(&user, &100, &1_000);
 
         // First close — must succeed.
-        let first = client.try_close_position(
-            &user, &1, &50, &110i128, &1u32, &provider, &0u64,
-        );
+        let first = client.try_close_position(&user, &1, &50, &110i128, &1u32, &provider, &0u64);
         assert!(first.is_ok(), "first close should succeed");
 
         // Second close — must return PositionAlreadyClosed.
-        let second = client.try_close_position(
-            &user, &1, &50, &110i128, &1u32, &provider, &0u64,
-        );
+        let second = client.try_close_position(&user, &1, &50, &110i128, &1u32, &provider, &0u64);
         assert_eq!(second, Err(Ok(PositionError::PositionAlreadyClosed)));
     }
 

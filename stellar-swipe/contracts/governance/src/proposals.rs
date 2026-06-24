@@ -176,7 +176,9 @@ pub fn get_proposals_state(env: &Env) -> ProposalsState {
 }
 
 pub fn put_proposals_state(env: &Env, state: &ProposalsState) {
-    env.storage().instance().set(&StorageKey::ProposalsState, state);
+    env.storage()
+        .instance()
+        .set(&StorageKey::ProposalsState, state);
 }
 
 pub fn get_delegation_state(env: &Env) -> DelegationState {
@@ -187,7 +189,9 @@ pub fn get_delegation_state(env: &Env) -> DelegationState {
 }
 
 pub fn put_delegation_state(env: &Env, state: &DelegationState) {
-    env.storage().instance().set(&StorageKey::Delegations, state);
+    env.storage()
+        .instance()
+        .set(&StorageKey::Delegations, state);
 }
 
 pub fn create_proposal(
@@ -304,8 +308,7 @@ pub fn cast_vote(
         return Err(GovernanceError::AlreadyVoted);
     }
 
-    let power = get_vote_snapshot(env, proposal_id, &voter)
-        .unwrap_or(0);
+    let power = get_vote_snapshot(env, proposal_id, &voter).unwrap_or(0);
     if power <= 0 {
         return Err(GovernanceError::NoVotingPower);
     }
@@ -374,10 +377,16 @@ pub fn finalize_proposal(env: &Env, proposal_id: u64) -> Result<ProposalStatus, 
 
     if status == ProposalStatus::Succeeded {
         if let ProposalType::ContractUpgrade(ref contract, ref new_hash) = proposal.proposal_type {
-            let execution_available_after = proposal.voting_ends.saturating_add(cfg.execution_delay);
+            let execution_available_after =
+                proposal.voting_ends.saturating_add(cfg.execution_delay);
             env.events().publish(
                 (symbol_short!("upgrade"), symbol_short!("announced")),
-                (contract.clone(), new_hash.clone(), execution_available_after, proposal.execution_payload.clone()),
+                (
+                    contract.clone(),
+                    new_hash.clone(),
+                    execution_available_after,
+                    proposal.execution_payload.clone(),
+                ),
             );
         }
     }
@@ -435,7 +444,9 @@ pub fn execute_proposal_action(env: &Env, proposal: &Proposal) -> Result<(), Gov
             if bal < *amount {
                 return Err(GovernanceError::InsufficientBalance);
             }
-            treasury.assets.set(asset.clone(), checked_sub(bal, *amount)?);
+            treasury
+                .assets
+                .set(asset.clone(), checked_sub(bal, *amount)?);
             put_treasury(env, &treasury);
             add_balance(env, recipient, *amount)?;
         }
@@ -531,7 +542,9 @@ pub fn calculate_proposal_statistics(env: &Env) -> Result<ProposalStatistics, Go
         if let Some(p) = state.proposals.get(id) {
             total = total.saturating_add(1);
             match p.status {
-                ProposalStatus::Pending | ProposalStatus::Active => active = active.saturating_add(1),
+                ProposalStatus::Pending | ProposalStatus::Active => {
+                    active = active.saturating_add(1)
+                }
                 ProposalStatus::Succeeded => succeeded = succeeded.saturating_add(1),
                 ProposalStatus::Failed => failed = failed.saturating_add(1),
                 ProposalStatus::Executed => executed = executed.saturating_add(1),
@@ -543,15 +556,17 @@ pub fn calculate_proposal_statistics(env: &Env) -> Result<ProposalStatistics, Go
                 .saturating_add(p.votes_against)
                 .saturating_add(p.votes_abstain);
             if total_supply > 0 {
-                part_total = part_total
-                    .saturating_add((all_votes.saturating_mul(BPS_DENOMINATOR) / total_supply) as u64);
+                part_total = part_total.saturating_add(
+                    (all_votes.saturating_mul(BPS_DENOMINATOR) / total_supply) as u64,
+                );
                 part_count = part_count.saturating_add(1);
             }
 
             let cast_votes = p.votes_for.saturating_add(p.votes_against);
             if cast_votes > 0 {
-                appr_total = appr_total
-                    .saturating_add((p.votes_for.saturating_mul(BPS_DENOMINATOR) / cast_votes) as u64);
+                appr_total = appr_total.saturating_add(
+                    (p.votes_for.saturating_mul(BPS_DENOMINATOR) / cast_votes) as u64,
+                );
                 appr_count = appr_count.saturating_add(1);
             }
         }

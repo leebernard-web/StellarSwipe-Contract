@@ -4,7 +4,7 @@
 //! filter event subscriptions accordingly.
 
 use crate::storage::DataKey;
-use soroban_sdk::{contracttype, Address, Env, String, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, Address, Env, IntoVal, String, Symbol, Val, Vec};
 
 /// Notification preferences for a user.
 /// Default: all alerts enabled.
@@ -62,7 +62,8 @@ pub enum SignalAction {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]pub enum SignalStatus {
+#[derive(Clone, Debug)]
+pub enum SignalStatus {
     Pending,
     Active,
     Executed,
@@ -73,7 +74,8 @@ pub enum SignalAction {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]pub struct TradingStyle {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TradingStyle {
     pub preferred_categories: Vec<SignalCategory>,
     pub risk_tolerance: RiskRating,
     pub max_hold_duration: HoldDuration,
@@ -90,7 +92,7 @@ pub struct Signal {
     pub rationale: String,
     pub timestamp: u64,
     pub expiry: u64,
-    pub status: crate::SignalStatus,
+    pub status: SignalStatus,
     pub executions: u32,
     pub successful_executions: u32,
     pub total_volume: i128,
@@ -164,7 +166,9 @@ pub fn set_trading_style(env: &Env, user: &Address, style: TradingStyle) {
 
 /// Retrieve trading style profile for `user`.
 pub fn get_trading_style(env: &Env, user: &Address) -> Option<TradingStyle> {
-    env.storage().persistent().get(&DataKey::TradingStyle(user.clone()))
+    env.storage()
+        .persistent()
+        .get(&DataKey::TradingStyle(user.clone()))
 }
 
 fn is_risk_allowed(signal_risk: &RiskLevel, tolerance: &RiskRating) -> bool {
@@ -176,8 +180,16 @@ fn is_risk_allowed(signal_risk: &RiskLevel, tolerance: &RiskRating) -> bool {
 fn category_matches_duration(category: &SignalCategory, max_hold_duration: &HoldDuration) -> bool {
     match max_hold_duration {
         HoldDuration::Any => true,
-        HoldDuration::Short => matches!(category, SignalCategory::SCALP | SignalCategory::ARBITRAGE),
-        HoldDuration::Medium => matches!(category, SignalCategory::SCALP | SignalCategory::SWING | SignalCategory::ARBITRAGE | SignalCategory::PREMIUM),
+        HoldDuration::Short => {
+            matches!(category, SignalCategory::SCALP | SignalCategory::ARBITRAGE)
+        }
+        HoldDuration::Medium => matches!(
+            category,
+            SignalCategory::SCALP
+                | SignalCategory::SWING
+                | SignalCategory::ARBITRAGE
+                | SignalCategory::PREMIUM
+        ),
         HoldDuration::Long => true,
     }
 }
@@ -187,7 +199,7 @@ fn category_in_preferences(category: &SignalCategory, preferred: &Vec<SignalCate
         return true;
     }
     for i in 0..preferred.len() {
-        if preferred.get(i) == Some(category) {
+        if preferred.get(i) == Some(category.clone()) {
             return true;
         }
     }
@@ -254,11 +266,8 @@ mod tests {
     use super::*;
     use crate::{UserPortfolio, UserPortfolioClient};
     use signal_registry::{
-        SignalAction as RegistrySignalAction,
-        SignalCategory as RegistrySignalCategory,
-        SignalRegistry,
-        SignalRegistryClient,
-        RiskLevel as RegistryRiskLevel,
+        RiskLevel as RegistryRiskLevel, SignalAction as RegistrySignalAction,
+        SignalCategory as RegistrySignalCategory, SignalRegistry, SignalRegistryClient,
     };
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env, String, Vec};
@@ -275,8 +284,7 @@ mod tests {
         (env, contract_id, client)
     }
 
-    fn setup_with_registry(
-    ) -> (
+    fn setup_with_registry() -> (
         Env,
         Address,
         UserPortfolioClient<'static>,
@@ -376,7 +384,9 @@ mod tests {
         };
 
         client.set_trading_style(&user, &style);
-        let stored = client.get_trading_style(&user).expect("style should be stored");
+        let stored = client
+            .get_trading_style(&user)
+            .expect("style should be stored");
         assert_eq!(stored, style);
     }
 
@@ -390,33 +400,29 @@ mod tests {
         let tags = Vec::new(&env);
         let expiry = env.ledger().timestamp() + 10_000;
 
-        registry
-            .create_signal(
-                &provider,
-                &asset_pair,
-                &RegistrySignalAction::Buy,
-                &100,
-                &rationale,
-                &expiry,
-                &RegistrySignalCategory::SWING,
-                &tags,
-                &RegistryRiskLevel::Low,
-            )
-            .unwrap();
+        registry.create_signal(
+            &provider,
+            &asset_pair,
+            &RegistrySignalAction::Buy,
+            &100,
+            &rationale,
+            &expiry,
+            &RegistrySignalCategory::SWING,
+            &tags,
+            &RegistryRiskLevel::Low,
+        );
 
-        registry
-            .create_signal(
-                &provider,
-                &asset_pair,
-                &RegistrySignalAction::Sell,
-                &50,
-                &rationale,
-                &expiry,
-                &RegistrySignalCategory::SCALP,
-                &tags,
-                &RegistryRiskLevel::High,
-            )
-            .unwrap();
+        registry.create_signal(
+            &provider,
+            &asset_pair,
+            &RegistrySignalAction::Sell,
+            &50,
+            &rationale,
+            &expiry,
+            &RegistrySignalCategory::SCALP,
+            &tags,
+            &RegistryRiskLevel::High,
+        );
 
         let recommendations = client.get_recommended_signals(&user);
         assert_eq!(recommendations.len(), 2);
@@ -432,33 +438,29 @@ mod tests {
         let tags = Vec::new(&env);
         let expiry = env.ledger().timestamp() + 10_000;
 
-        let id1 = registry
-            .create_signal(
-                &provider,
-                &asset_pair,
-                &RegistrySignalAction::Buy,
-                &100,
-                &rationale,
-                &expiry,
-                &RegistrySignalCategory::SWING,
-                &tags,
-                &RegistryRiskLevel::Low,
-            )
-            .unwrap();
+        let id1 = registry.create_signal(
+            &provider,
+            &asset_pair,
+            &RegistrySignalAction::Buy,
+            &100,
+            &rationale,
+            &expiry,
+            &RegistrySignalCategory::SWING,
+            &tags,
+            &RegistryRiskLevel::Low,
+        );
 
-        registry
-            .create_signal(
-                &provider,
-                &asset_pair,
-                &RegistrySignalAction::Sell,
-                &50,
-                &rationale,
-                &expiry,
-                &RegistrySignalCategory::SCALP,
-                &tags,
-                &RegistryRiskLevel::High,
-            )
-            .unwrap();
+        registry.create_signal(
+            &provider,
+            &asset_pair,
+            &RegistrySignalAction::Sell,
+            &50,
+            &rationale,
+            &expiry,
+            &RegistrySignalCategory::SCALP,
+            &tags,
+            &RegistryRiskLevel::High,
+        );
 
         let mut preferred = Vec::new(&env);
         preferred.push_back(SignalCategory::SWING);

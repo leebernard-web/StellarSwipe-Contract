@@ -61,14 +61,14 @@ pub fn set_trailing_stop(
 }
 
 pub fn get_trailing_stop(env: &Env, user: &Address, trade_id: u64) -> Option<(u32, i128)> {
-    let trail_bps: Option<u32> = env
-        .storage()
-        .persistent()
-        .get(&(Symbol::new(env, "TrailBps"), user.clone(), trade_id));
-    let peak: Option<i128> = env
-        .storage()
-        .persistent()
-        .get(&(Symbol::new(env, "TrailPeak"), user.clone(), trade_id));
+    let trail_bps: Option<u32> =
+        env.storage()
+            .persistent()
+            .get(&(Symbol::new(env, "TrailBps"), user.clone(), trade_id));
+    let peak: Option<i128> =
+        env.storage()
+            .persistent()
+            .get(&(Symbol::new(env, "TrailPeak"), user.clone(), trade_id));
     match (trail_bps, peak) {
         (Some(bps), Some(p)) => Some((bps, p)),
         _ => None,
@@ -77,12 +77,7 @@ pub fn get_trailing_stop(env: &Env, user: &Address, trade_id: u64) -> Option<(u3
 
 /// Update the peak price for a trailing stop. Call this whenever a new price is observed.
 /// Returns the updated peak (unchanged if `current_price` is not a new high).
-pub fn update_trailing_peak(
-    env: &Env,
-    user: &Address,
-    trade_id: u64,
-    current_price: i128,
-) -> i128 {
+pub fn update_trailing_peak(env: &Env, user: &Address, trade_id: u64, current_price: i128) -> i128 {
     let peak_key = (Symbol::new(env, "TrailPeak"), user.clone(), trade_id);
     let peak: i128 = env.storage().persistent().get(&peak_key).unwrap_or(0);
     if current_price > peak {
@@ -113,9 +108,7 @@ pub fn check_and_trigger_trailing_stop(
     let peak = update_trailing_peak(env, &user, trade_id, current_price);
 
     // Trigger price = peak * (10000 - trail_bps) / 10000
-    let trigger_price = peak
-        .saturating_mul((10_000 - trail_bps as i128))
-        / 10_000;
+    let trigger_price = peak.saturating_mul((10_000 - trail_bps as i128)) / 10_000;
 
     if current_price <= trigger_price {
         close_position_keeper(env, &portfolio, &user, trade_id, asset_pair);

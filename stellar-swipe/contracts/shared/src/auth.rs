@@ -2,7 +2,7 @@
 //! Nonce-based replay protection (Issue: replay attack prevention).
 //! Wasm hash verification for cross-contract calls (Issue: contract hijacking prevention).
 
-use soroban_sdk::{contracttype, contracterror, Address, BytesN, Env};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env};
 
 /// Maximum allowed cross-contract call depth.
 pub const MAX_CALL_DEPTH: u32 = 5;
@@ -65,7 +65,6 @@ pub fn set_expected_wasm_hash(env: &Env, contract_id: &Address, hash: &BytesN<32
 pub fn verify_wasm_hash(env: &Env, contract_id: &Address) -> Result<(), WasmHashError> {
     #[cfg(any(test, feature = "testutils"))]
     {
-        use soroban_sdk::testutils::Deployer;
         let expected: BytesN<32> = env
             .storage()
             .instance()
@@ -108,7 +107,7 @@ pub fn check_call_depth(call_depth: u32) -> Result<u32, CallDepthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Deployer, Ledger};
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
 
     #[contract]
@@ -139,7 +138,10 @@ mod tests {
         let user = soroban_sdk::Address::generate(&env);
         env.as_contract(&contract_id, || {
             consume_nonce(&env, &user, 42).unwrap();
-            assert_eq!(consume_nonce(&env, &user, 42), Err(NonceError::NonceAlreadyUsed));
+            assert_eq!(
+                consume_nonce(&env, &user, 42),
+                Err(NonceError::NonceAlreadyUsed)
+            );
         });
     }
 
@@ -150,7 +152,8 @@ mod tests {
         env.as_contract(&contract_id, || {
             consume_nonce(&env, &user, 7).unwrap();
             // Advance ledger past TTL
-            env.ledger().with_mut(|l| l.sequence_number += NONCE_TTL_LEDGERS + 1);
+            env.ledger()
+                .with_mut(|l| l.sequence_number += NONCE_TTL_LEDGERS + 1);
             // After expiry the key is gone; a new consume should succeed
             assert!(consume_nonce(&env, &user, 7).is_ok());
         });
@@ -225,7 +228,10 @@ mod tests {
 
     #[test]
     fn depth_at_limit_fails() {
-        assert_eq!(check_call_depth(MAX_CALL_DEPTH), Err(CallDepthError::CallDepthExceeded));
+        assert_eq!(
+            check_call_depth(MAX_CALL_DEPTH),
+            Err(CallDepthError::CallDepthExceeded)
+        );
     }
 
     #[test]

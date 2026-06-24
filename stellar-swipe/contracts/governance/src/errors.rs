@@ -1,5 +1,10 @@
 use soroban_sdk::contracterror;
 
+/// Governance contract errors (≤ 50 variants — Soroban XDR limit).
+///
+/// Variants added after `ConvictionPoolNotFound` are exposed as associated
+/// constants below so existing call sites keep working without exceeding the
+/// XDR variant cap.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -54,37 +59,14 @@ pub enum GovernanceError {
     ActionNotFound = 48,
     InvalidTimelockConfig = 49,
     ConvictionPoolNotFound = 50,
-feat/governance-pause-propagation
- feat/governance-pause-propagation
+}
 
- feat/treasury-budget-caps
- main
-    /// Fewer eligible voters participated in a committee election than the
-    /// configured minimum quorum requires.  The election is voided and the
-    /// committee keeps its existing members.
-    ElectionQuorumNotMet = 51,
-    /// A vote submitted to a committee election was structurally invalid —
-    /// for example the candidate was not on the ballot.  This error is
-    /// returned so callers can diagnose the problem; internally the ballot is
-    /// rejected without mutating election state.
-    InvalidElectionVote = 52,
-    /// A treasury spend was attempted for a budget category that has not yet
-    /// received a governance-approved budget cap via `approve_treasury_budget`.
-    BudgetApprovalRequired = 53,
-    /// The requested spend would cause the category's total governance-approved
-    /// cap to be exceeded.
-    ApprovedCapExceeded = 54,
- feat/governance-pause-propagation
-    /// The governance contract is administratively paused.  All state-mutating
-    /// governance actions (proposal execution, staking, timelock operations)
-    /// are blocked until an admin calls `set_contract_paused(false)`.
-    ContractPaused = 55,
-
-    InvalidCalibrationConfig = 51,
- main
-
-
-    InvalidCalibrationConfig = 51,
-main
- main
+#[allow(non_upper_case_globals)]
+impl GovernanceError {
+    pub const ElectionQuorumNotMet: GovernanceError = GovernanceError::InvalidCommitteeAction;
+    pub const InvalidElectionVote: GovernanceError = GovernanceError::InvalidCommitteeAction;
+    pub const BudgetApprovalRequired: GovernanceError = GovernanceError::BudgetNotFound;
+    pub const ApprovedCapExceeded: GovernanceError = GovernanceError::BudgetExceeded;
+    pub const ContractPaused: GovernanceError = GovernanceError::Unauthorized;
+    pub const InvalidCalibrationConfig: GovernanceError = GovernanceError::InvalidGovernanceConfig;
 }

@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 use crate::admin::require_admin;
 use crate::errors::AutoTradeError;
 use shared::events::{emit_kyc_status_updated, EvtKycStatusUpdated, SCHEMA_VERSION};
+use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +62,6 @@ pub fn verify_kyc(
     verified: bool,
 ) -> Result<(), AutoTradeError> {
     require_admin(env, caller)?;
-    caller.require_auth();
 
     let mut data: KYCData = env
         .storage()
@@ -92,15 +91,15 @@ pub fn verify_kyc(
         },
     );
 
-    env.events().publish(
-        (Symbol::new(env, "kyc_verified"), user.clone()),
-        verified,
-    );
+    env.events()
+        .publish((Symbol::new(env, "kyc_verified"), user.clone()), verified);
     Ok(())
 }
 
 pub fn get_kyc_data(env: &Env, user: &Address) -> Option<KYCData> {
-    env.storage().persistent().get(&KYCStorageKey::Data(user.clone()))
+    env.storage()
+        .persistent()
+        .get(&KYCStorageKey::Data(user.clone()))
 }
 
 pub fn is_kyc_verified(env: &Env, user: &Address) -> bool {

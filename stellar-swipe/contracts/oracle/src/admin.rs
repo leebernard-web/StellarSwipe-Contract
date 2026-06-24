@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, Map, String};
+use soroban_sdk::{Address, Env, Map, String};
 use stellar_swipe_common::emergency::{PauseState, CAT_ALL};
 
 use crate::errors::OracleError;

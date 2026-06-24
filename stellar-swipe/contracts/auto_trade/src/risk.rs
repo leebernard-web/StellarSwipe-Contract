@@ -634,7 +634,10 @@ mod tests {
             // SDEX spot = 95 (above stop-loss) — flash loan pumped it
             // Oracle TWAP = 80 (below stop-loss) — manipulation-resistant
             let triggered = check_stop_loss(&env, &user, 1, 95, Some(80), &config);
-            assert!(triggered, "oracle price below stop-loss must trigger even if SDEX spot is high");
+            assert!(
+                triggered,
+                "oracle price below stop-loss must trigger even if SDEX spot is high"
+            );
         });
     }
 
@@ -654,7 +657,10 @@ mod tests {
             // SDEX spot = 70 (below stop-loss) — flash loan dumped it
             // Oracle TWAP = 92 (above stop-loss) — manipulation-resistant
             let triggered = check_stop_loss(&env, &user, 1, 70, Some(92), &config);
-            assert!(!triggered, "oracle price above stop-loss must not trigger even if SDEX spot is low");
+            assert!(
+                !triggered,
+                "oracle price above stop-loss must not trigger even if SDEX spot is low"
+            );
         });
     }
 

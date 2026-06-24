@@ -88,15 +88,18 @@ pub fn init_admin(env: &Env, admin: Address) -> Result<(), AdminError> {
     env.storage()
         .instance()
         .set(&AdminStorageKey::PositionLimit, &DEFAULT_POSITION_LIMIT);
-    env.storage()
-        .instance()
-        .set(&AdminStorageKey::BronzeSignalLimit, &DEFAULT_BRONZE_SIGNAL_LIMIT);
-    env.storage()
-        .instance()
-        .set(&AdminStorageKey::SilverSignalLimit, &DEFAULT_SILVER_SIGNAL_LIMIT);
-    env.storage()
-        .instance()
-        .set(&AdminStorageKey::GoldSignalLimit, &DEFAULT_GOLD_SIGNAL_LIMIT);
+    env.storage().instance().set(
+        &AdminStorageKey::BronzeSignalLimit,
+        &DEFAULT_BRONZE_SIGNAL_LIMIT,
+    );
+    env.storage().instance().set(
+        &AdminStorageKey::SilverSignalLimit,
+        &DEFAULT_SILVER_SIGNAL_LIMIT,
+    );
+    env.storage().instance().set(
+        &AdminStorageKey::GoldSignalLimit,
+        &DEFAULT_GOLD_SIGNAL_LIMIT,
+    );
     env.storage()
         .instance()
         .set(&AdminStorageKey::MultiSigEnabled, &false);
@@ -257,12 +260,7 @@ pub fn propose_admin_transfer_direct(
         .instance()
         .set(&AdminStorageKey::PendingAdminTransfer, &pending);
 
-    emit_admin_transfer_proposed(
-        env,
-        caller.clone(),
-        new_admin,
-        expires_at_ledger as u64,
-    );
+    emit_admin_transfer_proposed(env, caller.clone(), new_admin, expires_at_ledger as u64);
     Ok(())
 }
 
@@ -304,7 +302,11 @@ pub fn set_min_stake(env: &Env, caller: &Address, new_amount: i128) -> Result<()
     set_min_stake_direct(env, caller, new_amount)
 }
 
-pub fn set_min_stake_direct(env: &Env, _caller: &Address, new_amount: i128) -> Result<(), AdminError> {
+pub fn set_min_stake_direct(
+    env: &Env,
+    _caller: &Address,
+    new_amount: i128,
+) -> Result<(), AdminError> {
     if new_amount <= 0 {
         return Err(AdminError::InvalidParameter);
     }
@@ -343,7 +345,11 @@ pub fn set_trade_fee(env: &Env, caller: &Address, new_fee_bps: u32) -> Result<()
     set_trade_fee_direct(env, caller, new_fee_bps)
 }
 
-pub fn set_trade_fee_direct(env: &Env, _caller: &Address, new_fee_bps: u32) -> Result<(), AdminError> {
+pub fn set_trade_fee_direct(
+    env: &Env,
+    _caller: &Address,
+    new_fee_bps: u32,
+) -> Result<(), AdminError> {
     if new_fee_bps > MAX_FEE_BPS {
         return Err(AdminError::InvalidFeeRate);
     }
@@ -498,7 +504,7 @@ pub fn pause_trading(env: &Env, caller: &Address) -> Result<(), AdminError> {
         env,
         caller,
         String::from_str(env, CAT_TRADING),
-        None,
+        Some(48 * 60 * 60),
         String::from_str(env, "Manual pause"),
     )
 }
@@ -988,10 +994,7 @@ pub fn require_self_destruct_allowed(env: &Env) -> Result<(), AdminError> {
 
 /// Governance-only: disable self-destruct protection so the contract can be
 /// deleted after a successful governance proposal.
-pub fn disable_self_destruct_protection(
-    env: &Env,
-    caller: &Address,
-) -> Result<(), AdminError> {
+pub fn disable_self_destruct_protection(env: &Env, caller: &Address) -> Result<(), AdminError> {
     require_admin(env, caller)?;
     caller.require_auth();
     env.storage()

@@ -11,7 +11,7 @@ extern crate std;
 
 use signal_registry::{
     reputation::signal_success_rate, FeeBreakdown, ProviderMetric, RiskLevel, SignalAction,
-    SignalCategory, SignalOutcome, SignalRegistry, SignalStatus,
+    SignalCategory, SignalOutcome, SignalRegistry, SignalRegistryClient, SignalStatus,
 };
 use soroban_sdk::{
     contract, contractimpl,
@@ -76,19 +76,17 @@ fn test_complete_user_journey() {
 
     // Step S1: Sara submits a signal
     let expiry = env.ledger().timestamp() + 3_600;
-    let signal_id = registry
-        .create_signal(
-            &sara,
-            &String::from_str(&env, "XLM/USDC"),
-            &SignalAction::Buy,
-            &1_000_000i128,
-            &String::from_str(&env, "XLM breakout above resistance"),
-            &expiry,
-            &SignalCategory::SWING,
-            &Vec::new(&env),
-            &RiskLevel::Medium,
-        )
-        .unwrap();
+    let signal_id = registry.create_signal(
+        &sara,
+        &String::from_str(&env, "XLM/USDC"),
+        &SignalAction::Buy,
+        &1_000_000i128,
+        &String::from_str(&env, "XLM breakout above resistance"),
+        &expiry,
+        &SignalCategory::SWING,
+        &Vec::new(&env),
+        &RiskLevel::Medium,
+    );
 
     assert_eq!(signal_id, 1u64);
 
@@ -103,11 +101,14 @@ fn test_complete_user_journey() {
     registry.set_platform_treasury(&admin, &treasury);
 
     // Step S3: Fee preview — verify fee math before any trade
-    let breakdown = registry.calculate_fee_preview(&1_000_000i128).unwrap();
-    assert_eq!(breakdown.total_fee, 1_000i128);           // 0.1%
-    assert_eq!(breakdown.platform_fee, 700i128);          // 70%
-    assert_eq!(breakdown.provider_fee, 300i128);          // 30%
-    assert_eq!(breakdown.platform_fee + breakdown.provider_fee, breakdown.total_fee);
+    let breakdown = registry.calculate_fee_preview(&1_000_000i128);
+    assert_eq!(breakdown.total_fee, 1_000i128); // 0.1%
+    assert_eq!(breakdown.platform_fee, 700i128); // 70%
+    assert_eq!(breakdown.provider_fee, 300i128); // 30%
+    assert_eq!(
+        breakdown.platform_fee + breakdown.provider_fee,
+        breakdown.total_fee
+    );
 
     // ─────────────────────────────────────────────────────────────────────────
     // ALEX'S JOURNEY
@@ -129,32 +130,31 @@ fn test_complete_user_journey() {
     assert_eq!(signal.adoption_count, 1u32);
 
     // Step A3: Alex copies the trade — profitable execution (+15%)
-    registry
-        .record_trade_execution(
-            &alex,
-            &signal_id,
-            &1_000_000i128, // entry
-            &1_150_000i128, // exit (+15%)
-            &10_000_000i128,
-        )
-        .unwrap();
+    registry.record_trade_execution(
+        &alex,
+        &signal_id,
+        &1_000_000i128, // entry
+        &1_150_000i128, // exit (+15%)
+        &10_000_000i128,
+    );
 
     let perf = registry.get_signal_performance(&signal_id).unwrap();
     assert_eq!(perf.executions, 1u32);
-    assert!(perf.average_roi > 0i128, "profitable trade must have positive ROI");
+    assert!(
+        perf.average_roi > 0i128,
+        "profitable trade must have positive ROI"
+    );
     assert_eq!(perf.total_volume, 10_000_000i128);
 
     // Step A4: Stop-loss triggers — second trade at a loss (-15%)
     env.ledger().set_timestamp(1_001_000);
-    registry
-        .record_trade_execution(
-            &alex,
-            &signal_id,
-            &1_000_000i128,
-            &850_000i128,   // exit (-15%) — stop-loss
-            &10_000_000i128,
-        )
-        .unwrap();
+    registry.record_trade_execution(
+        &alex,
+        &signal_id,
+        &1_000_000i128,
+        &850_000i128, // exit (-15%) — stop-loss
+        &10_000_000i128,
+    );
 
     // Step A5: Alex checks P&L — two executions, total volume correct
     let perf = registry.get_signal_performance(&signal_id).unwrap();
@@ -170,20 +170,16 @@ fn test_complete_user_journey() {
     env.ledger().set_timestamp(expiry + 1);
 
     let outcome_result = env.as_contract(&executor_id, || {
-        registry.record_signal_outcome(
-            &executor_id,
-            &signal_id,
-            &SignalOutcome::Profit,
-        )
+        registry.try_record_signal_outcome(&executor_id, &signal_id, &SignalOutcome::Profit)
     });
 
     match outcome_result {
-        Ok(()) => {
+        Ok(Ok(())) => {
             // new_score = 50 * 0.9 + 100 * 0.1 = 55
             let rep = registry.get_provider_reputation_score(&sara);
             assert_eq!(rep, 55u32, "Sara's reputation must be 55 after Profit");
         }
-        Err(_) => {
+        _ => {
             // Signal still Active — reputation unchanged at default 50
             let rep = registry.get_provider_reputation_score(&sara);
             assert_eq!(rep, 50u32);
@@ -198,19 +194,17 @@ fn test_complete_user_journey() {
         env.ledger().set_timestamp(1_100_000 + i * 100);
         let exp = env.ledger().timestamp() + 3_600;
 
-        let sid = registry
-            .create_signal(
-                &sara,
-                &String::from_str(&env, "XLM/USDC"),
-                &SignalAction::Buy,
-                &1_000_000i128,
-                &String::from_str(&env, "signal"),
-                &exp,
-                &SignalCategory::SWING,
-                &Vec::new(&env),
-                &RiskLevel::Medium,
-            )
-            .unwrap();
+        let sid = registry.create_signal(
+            &sara,
+            &String::from_str(&env, "XLM/USDC"),
+            &SignalAction::Buy,
+            &1_000_000i128,
+            &String::from_str(&env, "signal"),
+            &exp,
+            &SignalCategory::SWING,
+            &Vec::new(&env),
+            &RiskLevel::Medium,
+        );
 
         // Adopt (unique nonce per signal)
         env.as_contract(&executor_id, || {
@@ -218,15 +212,13 @@ fn test_complete_user_journey() {
         });
 
         // Profitable trade closes the signal
-        registry
-            .record_trade_execution(
-                &sara,
-                &sid,
-                &1_000_000i128,
-                &1_100_000i128, // +10%
-                &5_000_000i128,
-            )
-            .unwrap();
+        registry.record_trade_execution(
+            &sara,
+            &sid,
+            &1_000_000i128,
+            &1_100_000i128, // +10%
+            &5_000_000i128,
+        );
     }
 
     // Step A6: Alex views leaderboard — Sara must appear
@@ -257,19 +249,17 @@ fn test_complete_user_journey() {
 
     env.ledger().set_timestamp(1_200_000);
     let zero_exp = env.ledger().timestamp() + 3_600;
-    let zero_sid = registry
-        .create_signal(
-            &sara,
-            &String::from_str(&env, "XLM/USDC"),
-            &SignalAction::Sell,
-            &1_000_000i128,
-            &String::from_str(&env, "zero adoption signal"),
-            &zero_exp,
-            &SignalCategory::SWING,
-            &Vec::new(&env),
-            &RiskLevel::Low,
-        )
-        .unwrap();
+    let zero_sid = registry.create_signal(
+        &sara,
+        &String::from_str(&env, "XLM/USDC"),
+        &SignalAction::Sell,
+        &1_000_000i128,
+        &String::from_str(&env, "zero adoption signal"),
+        &zero_exp,
+        &SignalCategory::SWING,
+        &Vec::new(&env),
+        &RiskLevel::Low,
+    );
 
     let zero_signal = registry.get_signal(&zero_sid).unwrap();
     assert_eq!(zero_signal.adoption_count, 0u32);

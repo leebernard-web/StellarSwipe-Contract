@@ -111,19 +111,19 @@ pub enum VotingKey {
 
 /// Cast a vote for a provider. One vote per voter per window; re-voting replaces prior vote.
 /// Voting power is derived from the voter's stake.
-pub fn cast_vote(
-    env: &Env,
-    voter: Address,
-    provider: Address,
-    kind: VoteKind,
-    voter_stake: i128,
-) {
+pub fn cast_vote(env: &Env, voter: Address, provider: Address, kind: VoteKind, voter_stake: i128) {
     let now = env.ledger().timestamp();
-    let power = (voter_stake / VOTE_POWER_DIVISOR).max(0).min(u32::MAX as i128) as u32;
+    let power = (voter_stake / VOTE_POWER_DIVISOR)
+        .max(0)
+        .min(u32::MAX as i128) as u32;
 
     // Rotate window if expired
     let window_key = VotingKey::VoteWindowStart(provider.clone());
-    let window_start: u64 = env.storage().persistent().get(&window_key).unwrap_or(now);
+    let mut window_start: u64 = env.storage().persistent().get(&window_key).unwrap_or(0);
+    if window_start == 0 {
+        window_start = now;
+        env.storage().persistent().set(&window_key, &window_start);
+    }
     let votes_key = VotingKey::CurrentVotes(provider.clone());
 
     let mut votes: Map<Address, VoteRecord> = if now >= window_start + VOTE_WINDOW_SECS {
@@ -153,9 +153,6 @@ pub fn cast_vote(
         },
     );
     env.storage().persistent().set(&votes_key, &votes);
-
-    // Check if dispute threshold is breached
-    check_dispute_threshold(env, &provider, &votes);
 }
 
 /// Tally votes and adjust reputation score. Called at window close.
@@ -199,9 +196,14 @@ fn tally_and_adjust(env: &Env, provider: &Address, votes: &Map<Address, VoteReco
     append_history(env, provider, new_score);
 
     env.events().publish(
-        (Symbol::new(env, "reputation_vote_tallied"), provider.clone()),
+        (
+            Symbol::new(env, "reputation_vote_tallied"),
+            provider.clone(),
+        ),
         (up_power, down_power, new_score),
     );
+
+    check_dispute_threshold(env, provider, votes);
 }
 
 /// Check if downvotes exceed dispute threshold; open dispute if so.
@@ -263,18 +265,18 @@ fn open_dispute(env: &Env, provider: &Address, downvote_bps: u32) {
 /// raised against is being closed out by this call.
 pub fn resolve_dispute(env: &Env, provider: Address, restore: bool) {
     let dispute_key = VotingKey::Dispute(provider.clone());
-    let mut record: DisputeRecord = env
-        .storage()
-        .persistent()
-        .get(&dispute_key)
-        .unwrap_or(DisputeRecord {
-            provider: provider.clone(),
-            opened_at: 0,
-            status: DisputeStatus::Resolved,
-            downvote_bps: 0,
-            appeal_status: AppealStatus::None,
-            appeal_submitted_at: 0,
-        });
+    let mut record: DisputeRecord =
+        env.storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or(DisputeRecord {
+                provider: provider.clone(),
+                opened_at: 0,
+                status: DisputeStatus::Resolved,
+                downvote_bps: 0,
+                appeal_status: AppealStatus::None,
+                appeal_submitted_at: 0,
+            });
 
     record.status = DisputeStatus::Resolved;
     if record.appeal_status == AppealStatus::Pending {
@@ -375,7 +377,11 @@ pub fn process_appeal_timeout(env: &Env, provider: Address) -> Result<(), Disput
     if record.appeal_status != AppealStatus::Pending {
         return Err(DisputeError::AppealNotPending);
     }
-    if env.ledger().timestamp() < record.appeal_submitted_at.saturating_add(APPEAL_WINDOW_SECS) {
+    if env.ledger().timestamp()
+        < record
+            .appeal_submitted_at
+            .saturating_add(APPEAL_WINDOW_SECS)
+    {
         return Err(DisputeError::AppealWindowNotElapsed);
     }
 
@@ -401,13 +407,13 @@ pub fn apply_recovery(env: &Env, provider: &Address) {
 /// Append a score entry to the provider's reputation history (capped at 10 entries).
 fn append_history(env: &Env, provider: &Address, score: u32) {
     let hist_key = VotingKey::History(provider.clone());
-    let mut history: ReputationHistory = env
-        .storage()
-        .persistent()
-        .get(&hist_key)
-        .unwrap_or(ReputationHistory {
-            entries: Vec::new(env),
-        });
+    let mut history: ReputationHistory =
+        env.storage()
+            .persistent()
+            .get(&hist_key)
+            .unwrap_or(ReputationHistory {
+                entries: Vec::new(env),
+            });
 
     let now = env.ledger().timestamp();
     history.entries.push_back((now, score));
@@ -449,82 +455,111 @@ pub fn get_current_votes(env: &Env, provider: &Address) -> Map<Address, VoteReco
 mod tests {
     use super::*;
     use crate::SignalRegistry;
+    use crate::SignalRegistryClient;
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::Env;
 
-    fn with_registry<R>(f: impl FnOnce(&Env) -> R) -> R {
+    fn with_registry<R>(f: impl FnOnce(&Env, &Address, &SignalRegistryClient, &Address) -> R) -> R {
         let env = Env::default();
+        env.mock_all_auths();
         env.ledger().set_timestamp(1_000_000);
         #[allow(deprecated)]
         let cid = env.register_contract(None, SignalRegistry);
-        env.as_contract(&cid, || f(&env))
+        let client = SignalRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        f(&env, &cid, &client, &admin)
+    }
+
+    fn cast_in_contract(
+        env: &Env,
+        cid: &Address,
+        voter: Address,
+        provider: Address,
+        kind: VoteKind,
+        stake: i128,
+    ) {
+        env.as_contract(cid, || cast_vote(env, voter, provider, kind, stake));
+    }
+
+    fn in_contract<R>(env: &Env, cid: &Address, f: impl FnOnce(&Env) -> R) -> R {
+        env.as_contract(cid, || f(env))
     }
 
     #[test]
     fn test_upvote_increases_score() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let voter = Address::generate(env);
             let provider = Address::generate(env);
-            // Set initial score
-            env.storage()
-                .instance()
-                .set(&crate::StorageKey::ProviderReputationScore(provider.clone()), &50u32);
+            in_contract(env, cid, |env| {
+                env.storage().instance().set(
+                    &crate::StorageKey::ProviderReputationScore(provider.clone()),
+                    &50u32,
+                );
+            });
 
-            // Cast upvote with 100 XLM stake
-            cast_vote(env, voter.clone(), provider.clone(), VoteKind::Up, 1_000_000_000);
+            cast_in_contract(
+                env,
+                cid,
+                voter.clone(),
+                provider.clone(),
+                VoteKind::Up,
+                1_000_000_000,
+            );
 
-            // Advance past window
             env.ledger().set_timestamp(1_000_000 + VOTE_WINDOW_SECS + 1);
 
-            // Cast another vote to trigger tally of previous window
             let voter2 = Address::generate(env);
-            cast_vote(env, voter2, provider.clone(), VoteKind::Up, 1_000_000_000);
+            cast_in_contract(
+                env,
+                cid,
+                voter2,
+                provider.clone(),
+                VoteKind::Up,
+                1_000_000_000,
+            );
 
-            let score: u32 = env
-                .storage()
-                .instance()
-                .get(&crate::StorageKey::ProviderReputationScore(provider.clone()))
-                .unwrap_or(50);
-            assert_eq!(score, 55); // 50 + 5
+            let score = client.get_provider_reputation_score(&provider);
+            assert_eq!(score, 55);
         });
     }
 
     #[test]
     fn test_downvote_decreases_score() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let voter = Address::generate(env);
             let provider = Address::generate(env);
-            env.storage()
-                .instance()
-                .set(&crate::StorageKey::ProviderReputationScore(provider.clone()), &50u32);
+            in_contract(env, cid, |env| {
+                env.storage().instance().set(
+                    &crate::StorageKey::ProviderReputationScore(provider.clone()),
+                    &50u32,
+                );
+            });
 
-            cast_vote(env, voter, provider.clone(), VoteKind::Down, 1_000_000_000);
+            cast_in_contract(
+                env,
+                cid,
+                voter,
+                provider.clone(),
+                VoteKind::Down,
+                1_000_000_000,
+            );
             env.ledger().set_timestamp(1_000_000 + VOTE_WINDOW_SECS + 1);
             let voter2 = Address::generate(env);
-            cast_vote(env, voter2, provider.clone(), VoteKind::Up, 0);
+            cast_in_contract(env, cid, voter2, provider.clone(), VoteKind::Up, 0);
 
-            let score: u32 = env
-                .storage()
-                .instance()
-                .get(&crate::StorageKey::ProviderReputationScore(provider.clone()))
-                .unwrap_or(50);
-            assert_eq!(score, 45); // 50 - 5
+            let score = client.get_provider_reputation_score(&provider);
+            assert_eq!(score, 45);
         });
     }
 
     #[test]
     fn test_dispute_opens_when_threshold_exceeded() {
-        with_registry(|env| {
+        with_registry(|env, cid, _client, _admin| {
             let provider = Address::generate(env);
-            // 4 downvotes, 1 upvote → 80% downvotes > 30% threshold
-            for _ in 0..4u32 {
-                let voter = Address::generate(env);
-                cast_vote(env, voter, provider.clone(), VoteKind::Down, 1_000_000_000);
-            }
-            let voter = Address::generate(env);
-            cast_vote(env, voter, provider.clone(), VoteKind::Up, 1_000_000_000);
+            open_dispute_for(env, cid, &provider);
 
-            let dispute = get_dispute(env, &provider);
+            let dispute = in_contract(env, cid, |env| get_dispute(env, &provider));
             assert!(dispute.is_some());
             assert_eq!(dispute.unwrap().status, DisputeStatus::Open);
         });
@@ -532,204 +567,228 @@ mod tests {
 
     #[test]
     fn test_resolve_dispute_unfreezes_score() {
-        with_registry(|env| {
+        with_registry(|env, cid, _client, _admin| {
             let provider = Address::generate(env);
-            for _ in 0..4u32 {
-                let voter = Address::generate(env);
-                cast_vote(env, voter, provider.clone(), VoteKind::Down, 1_000_000_000);
-            }
-            let voter = Address::generate(env);
-            cast_vote(env, voter, provider.clone(), VoteKind::Up, 1_000_000_000);
+            open_dispute_for(env, cid, &provider);
 
-            resolve_dispute(env, provider.clone(), true);
+            in_contract(env, cid, |env| {
+                resolve_dispute(env, provider.clone(), true);
+            });
 
-            let dispute = get_dispute(env, &provider).unwrap();
-            assert_eq!(dispute.status, DisputeStatus::Resolved);
-            let frozen: bool = env
-                .storage()
-                .persistent()
-                .get(&VotingKey::ScoreFrozen(provider.clone()))
-                .unwrap_or(false);
-            assert!(!frozen);
+            in_contract(env, cid, |env| {
+                let dispute = get_dispute(env, &provider).unwrap();
+                assert_eq!(dispute.status, DisputeStatus::Resolved);
+                let frozen: bool = env
+                    .storage()
+                    .persistent()
+                    .get(&VotingKey::ScoreFrozen(provider.clone()))
+                    .unwrap_or(false);
+                assert!(!frozen);
+            });
         });
     }
 
     #[test]
     fn test_reputation_history_tracked() {
-        with_registry(|env| {
+        with_registry(|env, cid, _client, _admin| {
             let provider = Address::generate(env);
-            env.storage()
-                .instance()
-                .set(&crate::StorageKey::ProviderReputationScore(provider.clone()), &50u32);
+            in_contract(env, cid, |env| {
+                env.storage().instance().set(
+                    &crate::StorageKey::ProviderReputationScore(provider.clone()),
+                    &50u32,
+                );
+                apply_recovery(env, &provider);
+                apply_recovery(env, &provider);
 
-            apply_recovery(env, &provider);
-            apply_recovery(env, &provider);
-
-            let history = get_reputation_history(env, &provider);
-            assert_eq!(history.entries.len(), 2);
-            assert_eq!(history.entries.get(0).unwrap().1, 55);
-            assert_eq!(history.entries.get(1).unwrap().1, 60);
+                let history = get_reputation_history(env, &provider);
+                assert_eq!(history.entries.len(), 2);
+                assert_eq!(history.entries.get(0).unwrap().1, 55);
+                assert_eq!(history.entries.get(1).unwrap().1, 60);
+            });
         });
     }
 
     #[test]
     fn test_history_capped_at_10() {
-        with_registry(|env| {
+        with_registry(|env, cid, _client, _admin| {
             let provider = Address::generate(env);
-            env.storage()
-                .instance()
-                .set(&crate::StorageKey::ProviderReputationScore(provider.clone()), &0u32);
-            for _ in 0..15u32 {
-                apply_recovery(env, &provider);
-            }
-            let history = get_reputation_history(env, &provider);
-            assert_eq!(history.entries.len(), 10);
+            in_contract(env, cid, |env| {
+                env.storage().instance().set(
+                    &crate::StorageKey::ProviderReputationScore(provider.clone()),
+                    &0u32,
+                );
+                for _ in 0..15u32 {
+                    apply_recovery(env, &provider);
+                }
+                let history = get_reputation_history(env, &provider);
+                assert_eq!(history.entries.len(), 10);
+            });
         });
     }
 
-    fn open_dispute_for(env: &Env, provider: &Address) {
+    fn open_dispute_for(env: &Env, cid: &Address, provider: &Address) {
         for _ in 0..4u32 {
             let voter = Address::generate(env);
-            cast_vote(env, voter, provider.clone(), VoteKind::Down, 1_000_000_000);
+            cast_in_contract(
+                env,
+                cid,
+                voter,
+                provider.clone(),
+                VoteKind::Down,
+                1_000_000_000,
+            );
         }
         let voter = Address::generate(env);
-        cast_vote(env, voter, provider.clone(), VoteKind::Up, 1_000_000_000);
+        cast_in_contract(
+            env,
+            cid,
+            voter,
+            provider.clone(),
+            VoteKind::Up,
+            1_000_000_000,
+        );
+        env.ledger().set_timestamp(1_000_000 + VOTE_WINDOW_SECS + 1);
+        let voter2 = Address::generate(env);
+        cast_in_contract(env, cid, voter2, provider.clone(), VoteKind::Up, 0);
     }
 
     #[test]
     fn test_submit_appeal_marks_pending() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
+            client.submit_dispute_appeal(&provider);
 
-            let dispute = get_dispute(env, &provider).unwrap();
-            assert_eq!(dispute.appeal_status, AppealStatus::Pending);
-            assert_eq!(dispute.appeal_submitted_at, env.ledger().timestamp());
+            in_contract(env, cid, |env| {
+                let dispute = get_dispute(env, &provider).unwrap();
+                assert_eq!(dispute.appeal_status, AppealStatus::Pending);
+                assert_eq!(dispute.appeal_submitted_at, env.ledger().timestamp());
+            });
         });
     }
 
     #[test]
     fn test_submit_appeal_without_dispute_fails() {
-        with_registry(|env| {
+        with_registry(|env, _cid, client, _admin| {
             let provider = Address::generate(env);
-
-            env.mock_all_auths();
-            let result = submit_appeal(env, provider);
-            assert_eq!(result, Err(DisputeError::DisputeNotFound));
+            let result = client.try_submit_dispute_appeal(&provider);
+            assert_eq!(result, Err(Ok(DisputeError::DisputeNotFound)));
         });
     }
 
     #[test]
     fn test_submit_appeal_twice_fails() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
-            let result = submit_appeal(env, provider);
-            assert_eq!(result, Err(DisputeError::AppealAlreadySubmitted));
+            client.submit_dispute_appeal(&provider);
+            let result = client.try_submit_dispute_appeal(&provider);
+            assert_eq!(result, Err(Ok(DisputeError::AppealAlreadySubmitted)));
         });
     }
 
     #[test]
     fn test_resolve_appeal_approve_resolves_dispute_and_unfreezes_score() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
-            resolve_appeal(env, provider.clone(), true).unwrap();
+            client.submit_dispute_appeal(&provider);
+            client.resolve_dispute_appeal(admin, &provider, &true);
 
-            let dispute = get_dispute(env, &provider).unwrap();
-            assert_eq!(dispute.appeal_status, AppealStatus::Approved);
-            assert_eq!(dispute.status, DisputeStatus::Resolved);
-            let frozen: bool = env
-                .storage()
-                .persistent()
-                .get(&VotingKey::ScoreFrozen(provider.clone()))
-                .unwrap_or(false);
-            assert!(!frozen);
+            in_contract(env, cid, |env| {
+                let dispute = get_dispute(env, &provider).unwrap();
+                assert_eq!(dispute.appeal_status, AppealStatus::Approved);
+                assert_eq!(dispute.status, DisputeStatus::Resolved);
+                let frozen: bool = env
+                    .storage()
+                    .persistent()
+                    .get(&VotingKey::ScoreFrozen(provider.clone()))
+                    .unwrap_or(false);
+                assert!(!frozen);
+            });
         });
     }
 
     #[test]
     fn test_resolve_appeal_reject_leaves_dispute_open() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
-            resolve_appeal(env, provider.clone(), false).unwrap();
+            client.submit_dispute_appeal(&provider);
+            client.resolve_dispute_appeal(admin, &provider, &false);
 
-            let dispute = get_dispute(env, &provider).unwrap();
-            assert_eq!(dispute.appeal_status, AppealStatus::Rejected);
-            assert_eq!(dispute.status, DisputeStatus::Open);
+            in_contract(env, cid, |env| {
+                let dispute = get_dispute(env, &provider).unwrap();
+                assert_eq!(dispute.appeal_status, AppealStatus::Rejected);
+                assert_eq!(dispute.status, DisputeStatus::Open);
 
-            // Original dispute can still be resolved separately by an admin.
-            resolve_dispute(env, provider.clone(), true);
-            assert_eq!(get_dispute(env, &provider).unwrap().status, DisputeStatus::Resolved);
+                resolve_dispute(env, provider.clone(), true);
+                assert_eq!(
+                    get_dispute(env, &provider).unwrap().status,
+                    DisputeStatus::Resolved
+                );
+            });
         });
     }
 
     #[test]
     fn test_resolve_appeal_without_pending_appeal_fails() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            let result = resolve_appeal(env, provider, true);
-            assert_eq!(result, Err(DisputeError::AppealNotPending));
+            let result = client.try_resolve_dispute_appeal(admin, &provider, &true);
+            assert_eq!(result, Err(Ok(DisputeError::AppealNotPending)));
         });
     }
 
     #[test]
     fn test_process_appeal_timeout_before_window_elapsed_fails() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
+            client.submit_dispute_appeal(&provider);
 
-            env.ledger().set_timestamp(env.ledger().timestamp() + APPEAL_WINDOW_SECS - 1);
-            let result = process_appeal_timeout(env, provider);
-            assert_eq!(result, Err(DisputeError::AppealWindowNotElapsed));
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + APPEAL_WINDOW_SECS - 1);
+            let result = client.try_process_dispute_appeal_timeout(&provider);
+            assert_eq!(result, Err(Ok(DisputeError::AppealWindowNotElapsed)));
         });
     }
 
     #[test]
     fn test_process_appeal_timeout_after_window_auto_rejects() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            env.mock_all_auths();
-            submit_appeal(env, provider.clone()).unwrap();
+            client.submit_dispute_appeal(&provider);
 
-            env.ledger().set_timestamp(env.ledger().timestamp() + APPEAL_WINDOW_SECS + 1);
-            process_appeal_timeout(env, provider.clone()).unwrap();
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + APPEAL_WINDOW_SECS + 1);
+            client.process_dispute_appeal_timeout(&provider);
 
-            let dispute = get_dispute(env, &provider).unwrap();
-            assert_eq!(dispute.appeal_status, AppealStatus::Rejected);
-            // The underlying dispute itself is untouched by the timeout.
-            assert_eq!(dispute.status, DisputeStatus::Open);
+            in_contract(env, cid, |env| {
+                let dispute = get_dispute(env, &provider).unwrap();
+                assert_eq!(dispute.appeal_status, AppealStatus::Rejected);
+                assert_eq!(dispute.status, DisputeStatus::Open);
+            });
         });
     }
 
     #[test]
     fn test_process_appeal_timeout_without_pending_appeal_fails() {
-        with_registry(|env| {
+        with_registry(|env, cid, client, _admin| {
             let provider = Address::generate(env);
-            open_dispute_for(env, &provider);
+            open_dispute_for(env, cid, &provider);
 
-            let result = process_appeal_timeout(env, provider);
-            assert_eq!(result, Err(DisputeError::AppealNotPending));
+            let result = client.try_process_dispute_appeal_timeout(&provider);
+            assert_eq!(result, Err(Ok(DisputeError::AppealNotPending)));
         });
     }
 }

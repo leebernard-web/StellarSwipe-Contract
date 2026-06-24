@@ -168,7 +168,7 @@ pub fn emit_timelock_config_updated(env: &Env, updated_by: Address) {
 // ── Validation ─────────────────────────────────────────────────────────────────
 
 pub fn validate_signer_config(signers: &Vec<Address>, threshold: u32) -> Result<(), MultisigError> {
-    if threshold == 0 || threshold as u32 > signers.len() {
+    if threshold == 0 || threshold > signers.len() {
         return Err(MultisigError::InvalidThreshold);
     }
     if signers.len() > MAX_SIGNERS {
@@ -309,7 +309,7 @@ pub fn propose(
     let mut approved_at = 0u64;
     let mut executable_at = 0u64;
 
-    if approvals.len() >= threshold as u32 {
+    if approvals.len() >= threshold {
         status = ProposalStatus::Approved;
         approved_at = now;
         executable_at = now.saturating_add(delay);
@@ -366,7 +366,7 @@ pub fn approve(
     let approval_count = proposal.approvals.len();
     emit_approval_recorded(env, proposal_id, caller.clone(), approval_count, threshold);
 
-    if approval_count >= threshold as u32 {
+    if approval_count >= threshold {
         let config = get_timelock_config(env);
         let delay = config.delay_for(&proposal.action_type);
         let now = env.ledger().timestamp();
@@ -493,7 +493,13 @@ mod tests {
     #[test]
     fn test_timelock_config_delay_for_action_types() {
         let config = MultisigTimelockConfig::default_config();
-        assert_eq!(config.delay_for(&CriticalActionType::FeeChange), DEFAULT_FEE_CHANGE_DELAY);
-        assert_eq!(config.delay_for(&CriticalActionType::Pause), DEFAULT_PAUSE_DELAY);
+        assert_eq!(
+            config.delay_for(&CriticalActionType::FeeChange),
+            DEFAULT_FEE_CHANGE_DELAY
+        );
+        assert_eq!(
+            config.delay_for(&CriticalActionType::Pause),
+            DEFAULT_PAUSE_DELAY
+        );
     }
 }

@@ -6,9 +6,7 @@ use crate::{
     BatchTradeInput, TradeExecutorContract, TradeExecutorContractClient,
 };
 use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    testutils::Address as _,
-    token::StellarAssetClient,
+    contract, contractimpl, contracttype, testutils::Address as _, token::StellarAssetClient,
     Address, Env, Vec,
 };
 use stellar_swipe_common::perf::{
@@ -61,10 +59,7 @@ fn setup() -> (Env, Address, Address, Address) {
 
 fn funded_user(env: &Env, token: &Address) -> Address {
     let user = Address::generate(env);
-    StellarAssetClient::new(env, token).mint(
-        &user,
-        &(AMOUNT + DEFAULT_ESTIMATED_COPY_TRADE_FEE),
-    );
+    StellarAssetClient::new(env, token).mint(&user, &(AMOUNT + DEFAULT_ESTIMATED_COPY_TRADE_FEE));
     user
 }
 
@@ -74,7 +69,14 @@ fn test_single_copy_trade_latency_regression() {
     let client = TradeExecutorContractClient::new(&env, &exec_id);
     let user = funded_user(&env, &token);
 
-    client.execute_copy_trade(&user, &token, &AMOUNT, &None, &crate::OrderType::Market, &None);
+    client.execute_copy_trade(
+        &user,
+        &token,
+        &AMOUNT,
+        &None,
+        &crate::OrderType::Market,
+        &None,
+    );
 
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
     assert!(

@@ -1,13 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{
-    testutils::Address as _,
-    testutils::Ledger,
-    vec, Address, Env, String,
-};
-use signal_registry::{
-    CriticalActionPayload, SignalRegistry, SignalRegistryClient,
-};
+use signal_registry::{CriticalActionPayload, SignalRegistry, SignalRegistryClient};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger, vec, Address, Env, String};
 use stellar_swipe_common::{MultisigTimelockConfig, ProposalStatus};
 
 #[test]
@@ -35,10 +29,8 @@ fn test_multisig_governance_full_flow() {
     client.set_multisig_timelock_config(&alice, &config);
 
     // 1. Propose parameter update (min stake)
-    let proposal_id = client.propose_critical_action(
-        &alice,
-        &CriticalActionPayload::SetMinStake(500_000_000),
-    );
+    let proposal_id =
+        client.propose_critical_action(&alice, &CriticalActionPayload::SetMinStake(500_000_000));
     assert_eq!(
         client.get_approval_proposal(&proposal_id).status,
         ProposalStatus::Pending

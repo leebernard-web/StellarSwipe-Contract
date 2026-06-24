@@ -167,6 +167,7 @@ impl AnalyticsContract {
         let success_rate_wow = (current.avg_success_rate_bps as i32)
             .saturating_sub(previous.avg_success_rate_bps as i32);
 
+        #[allow(deprecated)]
         env.events().publish(
             (
                 Symbol::new(&env, "analytics"),
@@ -195,9 +196,7 @@ impl AnalyticsContract {
         env.storage()
             .instance()
             .set(&DataKey::PreviousSnapshot, &current);
-        env.storage()
-            .instance()
-            .set(&DataKey::LastReportTime, &now);
+        env.storage().instance().set(&DataKey::LastReportTime, &now);
     }
 
     /// Returns the timestamp of the last emitted report, or 0 if no report has
@@ -309,8 +308,8 @@ mod tests {
         let executions_wow =
             (w2.total_executions as i64).saturating_sub(w1.total_executions as i64);
         let volume_wow = w2.total_volume.saturating_sub(w1.total_volume);
-        let success_rate_wow = (w2.avg_success_rate_bps as i32)
-            .saturating_sub(w1.avg_success_rate_bps as i32);
+        let success_rate_wow =
+            (w2.avg_success_rate_bps as i32).saturating_sub(w1.avg_success_rate_bps as i32);
 
         assert_eq!(signals_wow, 50);
         assert_eq!(providers_wow, 5);
@@ -333,7 +332,8 @@ mod tests {
         client.emit_weekly_health_report(); // succeeds
 
         // Only 3 days later — must be rejected
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000 + 3 * 86_400);
+        env.ledger()
+            .with_mut(|l| l.timestamp = 1_000_000 + 3 * 86_400);
         let result = client.try_emit_weekly_health_report();
         assert!(result.is_err(), "call within same week must fail");
     }
@@ -353,7 +353,8 @@ mod tests {
         client.emit_weekly_health_report();
 
         // Advance to exactly last + SECONDS_PER_WEEK (boundary is inclusive >=)
-        env.ledger().with_mut(|l| l.timestamp = t0 + SECONDS_PER_WEEK);
+        env.ledger()
+            .with_mut(|l| l.timestamp = t0 + SECONDS_PER_WEEK);
         client.emit_weekly_health_report(); // must succeed
 
         assert_eq!(client.get_last_report_time(), t0 + SECONDS_PER_WEEK);

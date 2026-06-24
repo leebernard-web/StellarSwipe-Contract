@@ -3,9 +3,7 @@
 use crate::{PnlSummary, UserPortfolio, UserPortfolioClient};
 use proptest::prelude::*;
 use soroban_sdk::{
-    contract,
-    contractimpl,
-    symbol_short,
+    contract, contractimpl, symbol_short,
     testutils::{Address as _, Ledger},
     Address, Env,
 };

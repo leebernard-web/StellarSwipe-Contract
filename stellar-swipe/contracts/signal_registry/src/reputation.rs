@@ -13,20 +13,20 @@
 //! - 40-59: "Emerging" (yellow badge)
 //! - 0-39: "New/Unproven" (gray badge)
 
-use soroban_sdk::{contracttype, Address, Env, Map, Vec};
-use crate::types::ProviderPerformance;
-use crate::stake::StakeInfo;
 use crate::social;
+use crate::stake::StakeInfo;
+use crate::types::ProviderPerformance;
+use soroban_sdk::{contracttype, Address, Env, Map, Vec};
 
 const TRUST_SCORE_SCALE: u32 = 100; // 0-100 scale
 const MIN_SIGNALS_FOR_TRUST_SCORE: u32 = 5; // Minimum signals to calculate trust score
 
 // Trust score component weights (in basis points, total = 10000)
 const SUCCESS_RATE_WEIGHT: u32 = 4000; // 40%
-const CONSISTENCY_WEIGHT: u32 = 2000;  // 20%
-const STAKE_WEIGHT: u32 = 1500;        // 15%
-const FOLLOWER_WEIGHT: u32 = 1500;     // 15%
-const TENURE_WEIGHT: u32 = 1000;       // 10%
+const CONSISTENCY_WEIGHT: u32 = 2000; // 20%
+const STAKE_WEIGHT: u32 = 1500; // 15%
+const FOLLOWER_WEIGHT: u32 = 1500; // 15%
+const TENURE_WEIGHT: u32 = 1000; // 10%
 
 // Maximum tenure days for full score (365 days = 100%)
 const MAX_TENURE_DAYS: u64 = 365;
@@ -45,17 +45,17 @@ pub enum TrustScoreTier {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct TrustScoreComponents {
-    pub success_rate: u32,        // 0-10000 (basis points)
-    pub consistency: u32,         // 0-10000 (basis points)
-    pub stake_normalized: u32,    // 0-10000 (basis points)
+    pub success_rate: u32,         // 0-10000 (basis points)
+    pub consistency: u32,          // 0-10000 (basis points)
+    pub stake_normalized: u32,     // 0-10000 (basis points)
     pub followers_normalized: u32, // 0-10000 (basis points)
-    pub tenure_normalized: u32,   // 0-10000 (basis points)
+    pub tenure_normalized: u32,    // 0-10000 (basis points)
 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct TrustScoreDetails {
-    pub score: u32,               // 0-100
+    pub score: u32, // 0-100
     pub tier: TrustScoreTier,
     pub components: TrustScoreComponents,
     pub has_sufficient_history: bool, // true if >= MIN_SIGNALS_FOR_TRUST_SCORE
@@ -376,7 +376,6 @@ pub fn get_all_trust_scores(env: &Env) -> Vec<(Address, TrustScoreDetails)> {
     results
 }
 
-
 /// Success rate for a signal based on adoption count and successful executions.
 /// Returns None when adoption_count == 0 (undefined, not 0%).
 /// Returns Some(rate_bps) in basis points (0-10000) otherwise.
@@ -456,6 +455,7 @@ mod tests {
             success_rate: 6667, // 66.67%
             avg_return: 500,
             total_volume: 1000000,
+            follower_count: 0,
         };
 
         let score_details = calculate_trust_score(&env, &provider, &performance, &None);
@@ -513,9 +513,10 @@ mod tests {
             let provider = Address::generate(&env);
             let now = env.ledger().timestamp();
             let first_signal_time = now - (100 * SECONDS_PER_DAY);
-            env.storage()
-                .persistent()
-                .set(&ReputationDataKey::FirstSignalTime(provider.clone()), &first_signal_time);
+            env.storage().persistent().set(
+                &ReputationDataKey::FirstSignalTime(provider.clone()),
+                &first_signal_time,
+            );
             let component = calculate_tenure_component(&env, &provider, now);
             assert_eq!(component, 2739);
         });

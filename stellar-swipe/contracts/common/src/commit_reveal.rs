@@ -27,17 +27,11 @@ pub fn hash_trade_intent(
     let mut preimage = Bytes::new(env);
     preimage.append(&String::from_str(env, "sw_exec_v1").to_bytes());
     preimage.append(&user.to_string().to_bytes());
-    preimage.append(&Bytes::from_array(
-        env,
-        &signal_id.to_be_bytes(),
-    ));
+    preimage.append(&Bytes::from_array(env, &signal_id.to_be_bytes()));
     preimage.append(&Bytes::from_array(env, &amount.to_be_bytes()));
     preimage.append(&Bytes::from_array(env, &min_out.to_be_bytes()));
     preimage.append(&Bytes::from_array(env, &salt.to_be_bytes()));
-    preimage.append(&Bytes::from_array(
-        env,
-        &valid_until_ledger.to_be_bytes(),
-    ));
+    preimage.append(&Bytes::from_array(env, &valid_until_ledger.to_be_bytes()));
     env.crypto().sha256(&preimage).into()
 }
 

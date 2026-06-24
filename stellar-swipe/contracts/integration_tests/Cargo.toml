@@ -15,6 +15,7 @@ stake_vault = { path = "../stake_vault" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 signal_registry = { path = "../signal_registry", features = ["testutils"] }
+stellar_swipe_common = { path = "../common" }
 
 [[test]]
 name = "test_contract_upgrade"
@@ -27,3 +28,6 @@ path = "tests/integration/test_complete_user_journey.rs"
 [[test]]
 name = "test_multisig_governance"
 path = "tests/integration/test_multisig_governance.rs"
+
+[lints]
+workspace = true

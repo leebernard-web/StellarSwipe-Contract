@@ -592,10 +592,7 @@ pub struct EvtDataAccessed {
 /// internal reads do not produce spurious audit events.
 pub fn emit_data_accessed(env: &Env, accessor: Address, data_type: DataType, owner: Address) {
     env.events().publish(
-        (
-            Symbol::new(env, "audit"),
-            Symbol::new(env, "data_accessed"),
-        ),
+        (Symbol::new(env, "audit"), Symbol::new(env, "data_accessed")),
         EvtDataAccessed {
             schema_version: SCHEMA_VERSION,
             accessor,
@@ -686,7 +683,11 @@ pub fn emit_once<F: FnOnce()>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, contractimpl, testutils::{Address as _, Events, Ledger}, Env};
+    use soroban_sdk::{
+        contract, contractimpl,
+        testutils::{Address as _, Events, Ledger},
+        Env,
+    };
 
     #[contract]
     struct TestContract;
@@ -1104,7 +1105,12 @@ mod tests {
         let accessor = soroban_sdk::Address::generate(&env);
         let owner = soroban_sdk::Address::generate(&env);
         env.as_contract(&contract_id, || {
-            emit_data_accessed(&env, accessor.clone(), DataType::UserPortfolio, owner.clone());
+            emit_data_accessed(
+                &env,
+                accessor.clone(),
+                DataType::UserPortfolio,
+                owner.clone(),
+            );
             assert_eq!(env.events().all().len(), 1);
         });
     }
@@ -1115,7 +1121,12 @@ mod tests {
         let accessor = soroban_sdk::Address::generate(&env);
         let owner = soroban_sdk::Address::generate(&env);
         env.as_contract(&contract_id, || {
-            emit_data_accessed(&env, accessor.clone(), DataType::StakeBalance, owner.clone());
+            emit_data_accessed(
+                &env,
+                accessor.clone(),
+                DataType::StakeBalance,
+                owner.clone(),
+            );
             assert_eq!(env.events().all().len(), 1);
         });
     }
@@ -1126,7 +1137,12 @@ mod tests {
         let accessor = soroban_sdk::Address::generate(&env);
         let owner = soroban_sdk::Address::generate(&env);
         env.as_contract(&contract_id, || {
-            emit_data_accessed(&env, accessor.clone(), DataType::ProviderProfile, owner.clone());
+            emit_data_accessed(
+                &env,
+                accessor.clone(),
+                DataType::ProviderProfile,
+                owner.clone(),
+            );
             assert_eq!(env.events().all().len(), 1);
         });
     }

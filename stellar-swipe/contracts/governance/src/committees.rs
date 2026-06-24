@@ -651,9 +651,7 @@ pub fn finalize_election(
     }
 
     // ── Quorum: minimum staked-weight participation ────────────────────────
-    if election.quorum_stake_threshold > 0
-        && total_stake_weight < election.quorum_stake_threshold
-    {
+    if election.quorum_stake_threshold > 0 && total_stake_weight < election.quorum_stake_threshold {
         state.elections.remove(committee_id);
         return Ok(ElectionResult {
             status: ElectionStatus::FailedQuorumStake,
@@ -1189,7 +1187,12 @@ fn tally_election_votes_with_validation(
         index += 1;
     }
 
-    Ok((candidate_votes, valid_votes, total_stake_weight, rejected_votes))
+    Ok((
+        candidate_votes,
+        valid_votes,
+        total_stake_weight,
+        rejected_votes,
+    ))
 }
 
 fn pct_change(current: i128, proposed: i128) -> Result<u32, GovernanceError> {

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env, Symbol, String};
+use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,12 +15,9 @@ pub fn emit_onboarding_status_updated(
     status: OnboardingStatus,
     milestone: Option<String>,
 ) {
+    #[allow(deprecated)]
     env.events().publish(
-        (
-            Symbol::new(env, "UserOnboardingStatusUpdated"),
-            user,
-            status,
-            milestone,
-        ),
+        (Symbol::new(env, "UserOnboardingStatusUpdated"),),
+        (user, status, milestone),
     );
 }

@@ -138,7 +138,10 @@ fn market_sim_trending_up_path_never_trips_slippage() {
                 max_slippage_bps,
             )
         });
-        assert!(out.is_ok(), "uptrend step {step} should never exceed slippage tolerance");
+        assert!(
+            out.is_ok(),
+            "uptrend step {step} should never exceed slippage tolerance"
+        );
         price_bps += 25; // price improves 0.25% each step
     }
 }
@@ -164,7 +167,10 @@ fn market_sim_mild_downtrend_within_tolerance_succeeds() {
                 max_slippage_bps,
             )
         });
-        assert!(out.is_ok(), "downtrend step {step} is within tolerance and must succeed");
+        assert!(
+            out.is_ok(),
+            "downtrend step {step} is within tolerance and must succeed"
+        );
     }
 }
 
@@ -220,12 +226,15 @@ fn slippage_property_sweep_across_amounts_and_market_moves() {
     for _ in 0..200 {
         let amount = 1_000 + (next_rand(&mut seed) % 10_000_000) as i128;
         let max_slippage_bps = (next_rand(&mut seed) % 2_000) as u32; // 0–20%
-        // Market move centered on 0, roughly -30%..+30%.
+                                                                      // Market move centered on 0, roughly -30%..+30%.
         let move_bps = (next_rand(&mut seed) % 6_000) as i128 - 3_000;
         let price_bps = 10_000 + move_bps;
 
         let min_received = sdex::min_received_from_slippage(amount, max_slippage_bps).unwrap();
-        assert!(min_received <= amount, "min_received must never exceed the requested amount");
+        assert!(
+            min_received <= amount,
+            "min_received must never exceed the requested amount"
+        );
         assert!(min_received >= 0, "min_received must never be negative");
 
         set_price(&env, &router_id, price_bps);
@@ -304,7 +313,10 @@ fn stress_high_frequency_trades_respect_daily_volume_boundary() {
             &OrderType::Market,
             &None,
         );
-        assert!(result.is_ok(), "trade {i} within the daily volume budget should succeed");
+        assert!(
+            result.is_ok(),
+            "trade {i} within the daily volume budget should succeed"
+        );
     }
 
     // The next trade would push cumulative volume past the limit.

@@ -54,8 +54,10 @@ impl ReputationTier {
 // ── Staleness Levels ─────────────────────────────────────────────────────
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StalenessLevel {
+    /// No manual override; staleness is derived from last activity.
+    Auto,
     Active,
     Aging,
     Stale,
@@ -119,8 +121,8 @@ pub struct GovernanceReputation {
     pub tier: ReputationTier,
     /// Override grace period in days (0 = use tier default).
     pub grace_override: u64,
-    /// Manual staleness level override (None = auto-detected).
-    pub staleness_override: Option<StalenessLevel>,
+    /// Manual staleness level override (`Auto` = auto-detected from activity).
+    pub staleness_override: StalenessLevel,
 }
 
 #[contracttype]
@@ -165,11 +167,18 @@ pub fn detect_staleness(env: &Env, last_activity: u64) -> StalenessLevel {
     }
 }
 
+pub fn resolve_staleness(env: &Env, rep: &GovernanceReputation) -> StalenessLevel {
+    match rep.staleness_override {
+        StalenessLevel::Auto => detect_staleness(env, rep.last_activity),
+        level => level,
+    }
+}
+
 /// Calculate the effective staleness penalty multiplier (BPS basis).
 /// 10_000 = no penalty; lower = reduced voting weight.
 pub fn staleness_penalty_multiplier(level: &StalenessLevel) -> u32 {
     match level {
-        StalenessLevel::Active => 10_000,
+        StalenessLevel::Auto | StalenessLevel::Active => 10_000,
         StalenessLevel::Aging => 8_000,
         StalenessLevel::Stale => 5_000,
         StalenessLevel::Critical => 2_000,
@@ -179,10 +188,8 @@ pub fn staleness_penalty_multiplier(level: &StalenessLevel) -> u32 {
 /// Compute the tier for a user based on participation history.
 pub fn compute_tier(rep: &GovernanceReputation) -> ReputationTier {
     let p = &rep.participation_history;
-    let total_actions = p.proposals_created
-        + p.votes_cast
-        + p.committee_memberships
-        + p.delegations_received;
+    let total_actions =
+        p.proposals_created + p.votes_cast + p.committee_memberships + p.delegations_received;
 
     if total_actions >= 500 {
         ReputationTier::Platinum
@@ -217,32 +224,29 @@ pub fn put_reputation_state(env: &Env, state: &ReputationState) {
 
 pub fn get_governance_reputation(env: &Env, user: Address) -> GovernanceReputation {
     let state = get_reputation_state(env);
-    state
-        .reputations
-        .get(user.clone())
-        .unwrap_or_else(|| {
-            let rep = GovernanceReputation {
-                user: user.clone(),
-                reputation_score: 0,
-                participation_history: ParticipationHistory {
-                    proposals_created: 0,
-                    proposals_succeeded: 0,
-                    votes_cast: 0,
-                    votes_aligned_with_outcome: 0,
-                    committee_memberships: 0,
-                    committee_decisions_approved: 0,
-                    delegations_received: 0,
-                    total_tokens_delegated: 0,
-                },
-                badges: Vec::new(env),
-                last_activity: env.ledger().timestamp(),
-                decay_rate: 10,
-                tier: get_reputation_config(env).default_tier.clone(),
-                grace_override: 0,
-                staleness_override: None,
-            };
-            rep
-        })
+    state.reputations.get(user.clone()).unwrap_or_else(|| {
+        let rep = GovernanceReputation {
+            user: user.clone(),
+            reputation_score: 0,
+            participation_history: ParticipationHistory {
+                proposals_created: 0,
+                proposals_succeeded: 0,
+                votes_cast: 0,
+                votes_aligned_with_outcome: 0,
+                committee_memberships: 0,
+                committee_decisions_approved: 0,
+                delegations_received: 0,
+                total_tokens_delegated: 0,
+            },
+            badges: Vec::new(env),
+            last_activity: env.ledger().timestamp(),
+            decay_rate: 10,
+            tier: get_reputation_config(env).default_tier.clone(),
+            grace_override: 0,
+            staleness_override: StalenessLevel::Auto,
+        };
+        rep
+    })
 }
 
 pub fn calculate_reputation_score(env: &Env, user: Address) -> Result<u32, GovernanceError> {
@@ -302,11 +306,17 @@ pub fn calculate_reputation_score(env: &Env, user: Address) -> Result<u32, Gover
     // Apply tier-based decay schedule
     let config = get_reputation_config(env);
     let effective_tier = rep.tier.clone();
-    score = apply_tiered_decay(env, score, rep.last_activity, rep.grace_override, &effective_tier);
+    score = apply_tiered_decay(
+        env,
+        score,
+        rep.last_activity,
+        rep.grace_override,
+        &effective_tier,
+    );
 
     // Apply staleness penalty if enabled
     if config.stale_penalty_enabled {
-        let staleness = rep.staleness_override.clone().unwrap_or_else(|| detect_staleness(env, rep.last_activity));
+        let staleness = resolve_staleness(env, &rep);
         let penalty_mult = staleness_penalty_multiplier(&staleness);
         score = ((score as u64).saturating_mul(penalty_mult as u64) / 10_000) as u32;
     }

@@ -126,7 +126,8 @@ pub fn calculate_global_analytics(env: &Env, signals_map: &Map<u64, Signal>) -> 
                 if matches!(
                     signal.status,
                     SignalStatus::Successful | SignalStatus::Failed
-                ) && signal.adoption_count > 0 {
+                ) && signal.adoption_count > 0
+                {
                     terminal += 1;
                     if signal.status == SignalStatus::Successful {
                         successful += 1;
@@ -355,9 +356,8 @@ pub fn calculate_category_analytics(
 
                     // Accumulate average ROI per signal
                     if signal.executions > 0 {
-                        total_roi = total_roi.saturating_add(
-                            signal.total_roi / signal.executions as i128,
-                        );
+                        total_roi =
+                            total_roi.saturating_add(signal.total_roi / signal.executions as i128);
                     }
                 }
             }
@@ -398,9 +398,10 @@ pub fn calculate_category_analytics(
         total_adopters,
         top_provider: top_provider.unwrap_or_else(|| {
             // Use a zero-address placeholder when no provider qualifies
-            Address::from_str(env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+            Address::from_str(
+                env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            )
         }),
     }
 }
-
-

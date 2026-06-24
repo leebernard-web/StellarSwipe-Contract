@@ -1,6 +1,6 @@
-use soroban_sdk::{contracttype, Address, Env, String};
-use stellar_swipe_common::Asset;
 use shared::errors::{ErrorCategory, RecoveryStrategy};
+use soroban_sdk::{contracttype, Address, Env, String, Vec};
+use stellar_swipe_common::Asset;
 
 pub const MAX_FEE_RATE_BPS: u32 = 100; // 1%
 pub const MIN_FEE_RATE_BPS: u32 = 1; // 0.01%
@@ -58,7 +58,7 @@ pub enum StorageKey {
 }
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FeeOptimizationConfig {
     pub max_dynamic_rate_bps: u32,
     pub congestion_sensitivity_bps: u32,
@@ -106,7 +106,7 @@ pub struct MonthlyTradeVolume {
 /// Describes a discrepancy between the contract's stored treasury balance
 /// and the actual on-chain token balance for a given token.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BalanceMismatch {
     /// The token whose balances were compared.
     pub token: Address,
@@ -448,9 +448,10 @@ pub fn add_revenue_share_pool(env: &Env, token: &Address, amount: i128) {
         .persistent()
         .get(&StorageKey::RevenueSharePool(token.clone()))
         .unwrap_or(0);
-    env.storage()
-        .persistent()
-        .set(&StorageKey::RevenueSharePool(token.clone()), &current.saturating_add(amount));
+    env.storage().persistent().set(
+        &StorageKey::RevenueSharePool(token.clone()),
+        &current.saturating_add(amount),
+    );
 }
 
 pub fn clear_revenue_share_pool(env: &Env, token: &Address) {

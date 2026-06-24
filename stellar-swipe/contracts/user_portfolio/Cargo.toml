@@ -17,3 +17,6 @@ shared = { path = "../shared" }
 signal_registry = { path = "../signal_registry" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

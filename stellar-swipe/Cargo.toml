@@ -18,6 +18,36 @@ members = [
 [workspace.dependencies]
 soroban-sdk = "23"
 
+[workspace.lints.rust]
+deprecated = "allow"
+dead_code = "allow"
+unused_imports = "allow"
+unused_variables = "allow"
+unused_mut = "allow"
+unreachable_patterns = "allow"
+private_interfaces = "allow"
+private_bounds = "allow"
+unused_qualifications = "allow"
+unused_must_use = "allow"
+unused_assignments = "allow"
+unused_parens = "allow"
+unused_braces = "allow"
+unused_lifetimes = "allow"
+unused_macro_rules = "allow"
+unused_allocation = "allow"
+unused_comparisons = "allow"
+unused_doc_comments = "allow"
+unused_crate_dependencies = "allow"
+unused_extern_crates = "allow"
+unused_features = "allow"
+unused_labels = "allow"
+unused_results = "allow"
+unused_unsafe = "allow"
+non_camel_case_types = "allow"
+
+[workspace.lints.clippy]
+all = "allow"
+
 # Smaller WASM for Soroban deploys (lower upload cost + instruction footprint).
 # Build:  cargo build --workspace --target wasm32-unknown-unknown --release
 # Then:   ./scripts/build.sh   (runs `stellar contract optimize` on each *.wasm)

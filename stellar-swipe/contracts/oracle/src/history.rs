@@ -1,8 +1,8 @@
 //! Historical price storage and TWAP calculation
 
 use crate::errors::OracleError;
+use soroban_sdk::{symbol_short, Env};
 use stellar_swipe_common::AssetPair;
-use soroban_sdk::Env;
 
 const BUCKET_SIZE: u64 = 300; // 5 minutes
 const MAX_BUCKETS: u64 = 2016; // 7 days at 5-min intervals
@@ -69,9 +69,16 @@ fn prune_old_data(env: &Env, pair: &AssetPair, current_bucket: u64) {
     if current_bucket < MAX_BUCKETS {
         return;
     }
-    let oldest_bucket = current_bucket - MAX_BUCKETS;
-    let key = (pair.clone(), oldest_bucket);
-    env.storage().persistent().remove(&key);
+
+    let target = current_bucket - MAX_BUCKETS;
+    let prune_key = (pair.clone(), symbol_short!("prune"));
+    let mut last: u64 = env.storage().instance().get(&prune_key).unwrap_or(0);
+    while last < target {
+        let key = (pair.clone(), last);
+        env.storage().persistent().remove(&key);
+        last += 1;
+    }
+    env.storage().instance().set(&prune_key, &last);
 }
 
 /// Query price deviation from TWAP (basis points)
@@ -92,8 +99,11 @@ pub fn get_twap_deviation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        Address, Env, String,
+    };
     use stellar_swipe_common::Asset;
-    use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
 
     fn test_pair(env: &Env) -> AssetPair {
         AssetPair {
@@ -108,47 +118,52 @@ mod tests {
         }
     }
 
-    fn make_contract(env: &Env) -> soroban_sdk::Address {
-        env.register_contract(None, crate::OracleContract)
+    fn with_oracle_contract<F, R>(f: F) -> R
+    where
+        F: FnOnce(&Env) -> R,
+    {
+        let env = Env::default();
+        env.cost_estimate().budget().reset_unlimited();
+        let contract_id = env.register_contract(None, crate::OracleContract);
+        env.as_contract(&contract_id, || f(&env))
     }
 
     #[test]
     fn test_store_and_retrieve() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        let ts = env.ledger().timestamp();
-        env.as_contract(&contract, || {
-            store_price(&env, &pair, 10_000_000);
-            let price = get_historical_price(&env, &pair, ts);
+        with_oracle_contract(|env| {
+            let pair = test_pair(env);
+
+            store_price(env, &pair, 10_000_000);
+            let price = get_historical_price(env, &pair, env.ledger().timestamp());
             assert_eq!(price, Some(10_000_000));
         });
     }
 
     #[test]
     fn test_twap_calculation() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
             env.ledger().with_mut(|li| li.timestamp = 1000);
-            store_price(&env, &pair, 10_000_000);
+            let pair = test_pair(env);
+
+            store_price(env, &pair, 10_000_000);
+
             env.ledger().with_mut(|li| li.timestamp = 1300);
-            store_price(&env, &pair, 11_000_000);
+            store_price(env, &pair, 11_000_000);
+
             env.ledger().with_mut(|li| li.timestamp = 1600);
-            store_price(&env, &pair, 12_000_000);
-            let twap = calculate_twap(&env, &pair, 1000).unwrap();
+            store_price(env, &pair, 12_000_000);
+
+            let twap = calculate_twap(env, &pair, 1000).unwrap();
             assert_eq!(twap, 11_000_000);
         });
     }
 
     #[test]
     fn test_insufficient_data() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            let result = calculate_twap(&env, &pair, 3600);
+        with_oracle_contract(|env| {
+            let pair = test_pair(env);
+
+            let result = calculate_twap(env, &pair, 3600);
             assert!(result.is_err());
             assert_eq!(result.unwrap_err(), OracleError::InsufficientHistoricalData);
         });
@@ -156,162 +171,173 @@ mod tests {
 
     #[test]
     fn test_deviation_calculation() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
             env.ledger().with_mut(|li| li.timestamp = 1000);
-            store_price(&env, &pair, 10_000_000);
+            let pair = test_pair(env);
+
+            store_price(env, &pair, 10_000_000);
             env.ledger().with_mut(|li| li.timestamp = 1300);
-            store_price(&env, &pair, 10_000_000);
-            let deviation = get_twap_deviation(&env, &pair, 11_000_000, 600).unwrap();
-            assert_eq!(deviation, 1000);
+            store_price(env, &pair, 10_000_000);
+
+            let deviation = get_twap_deviation(env, &pair, 11_000_000, 600).unwrap();
+            assert_eq!(deviation, 1000); // 10% deviation
         });
     }
 
     #[test]
     fn test_twap_1h_window() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            for i in 0..13u64 {
+        with_oracle_contract(|env| {
+            env.ledger().with_mut(|li| li.timestamp = 0);
+            let pair = test_pair(env);
+
+            // Store prices every 5 minutes for 1 hour
+            for i in 0..13 {
                 env.ledger().with_mut(|li| li.timestamp = i * 300);
-                store_price(&env, &pair, 10_000_000 + (i as i128 * 100_000));
+                store_price(env, &pair, 10_000_000 + (i as i128 * 100_000));
             }
+
             env.ledger().with_mut(|li| li.timestamp = 3600);
-            let twap = calculate_twap(&env, &pair, 3600).unwrap();
+            let twap = calculate_twap(env, &pair, 3600).unwrap();
             assert!(twap >= 10_000_000 && twap <= 11_200_000);
         });
     }
 
     #[test]
     fn test_twap_24h_window() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            for i in 0..25u64 {
+        with_oracle_contract(|env| {
+            env.ledger().with_mut(|li| li.timestamp = 0);
+            let pair = test_pair(env);
+
+            // Store prices every hour for 24 hours
+            for i in 0..25 {
                 env.ledger().with_mut(|li| li.timestamp = i * 3600);
-                store_price(&env, &pair, 10_000_000);
+                store_price(env, &pair, 10_000_000);
             }
+
             env.ledger().with_mut(|li| li.timestamp = 86400);
-            let twap = calculate_twap(&env, &pair, 86400).unwrap();
+            let twap = calculate_twap(env, &pair, 86400).unwrap();
             assert_eq!(twap, 10_000_000);
         });
     }
 
     #[test]
     fn test_twap_7d_window() {
-        let env = Env::default();
-        env.budget().reset_unlimited();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            for i in 0..15u64 {
+        with_oracle_contract(|env| {
+            env.ledger().with_mut(|li| li.timestamp = 0);
+            let pair = test_pair(env);
+
+            // Store prices every 12 hours for 7 days
+            for i in 0..15 {
                 env.ledger().with_mut(|li| li.timestamp = i * 43200);
-                store_price(&env, &pair, 10_000_000 + (i as i128 * 50_000));
+                store_price(env, &pair, 10_000_000 + (i as i128 * 50_000));
             }
+
             env.ledger().with_mut(|li| li.timestamp = 604800);
-            let twap = calculate_twap(&env, &pair, 604800).unwrap();
+            let twap = calculate_twap(env, &pair, 604800).unwrap();
             assert!(twap >= 10_000_000 && twap <= 10_700_000);
         });
     }
 
     #[test]
     fn test_future_timestamp_rejected() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
             env.ledger().with_mut(|li| li.timestamp = 1000);
-            store_price(&env, &pair, 10_000_000);
-            let result = get_historical_price(&env, &pair, 2000);
+            let pair = test_pair(env);
+
+            store_price(env, &pair, 10_000_000);
+
+            // Try to query future timestamp
+            let result = get_historical_price(env, &pair, 2000);
             assert_eq!(result, None);
         });
     }
 
     #[test]
     fn test_data_pruning_after_7_days() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
+            let pair = test_pair(env);
+
+            // Store price at day 0
             env.ledger().with_mut(|li| li.timestamp = 0);
-            store_price(&env, &pair, 10_000_000);
+            store_price(env, &pair, 10_000_000);
 
-            // Store at exactly MAX_BUCKETS — prunes bucket 0
-            let prune_ts = MAX_BUCKETS * BUCKET_SIZE;
-            env.ledger().with_mut(|li| li.timestamp = prune_ts);
-            store_price(&env, &pair, 11_000_000);
+            // Move to day 8 and store new price (should trigger pruning)
+            env.ledger().with_mut(|li| li.timestamp = 8 * 86400);
+            store_price(env, &pair, 11_000_000);
 
-            let old_price = get_historical_price(&env, &pair, 0);
+            // Old data should be pruned
+            let old_price = get_historical_price(env, &pair, 0);
             assert_eq!(old_price, None);
-            let new_price = get_historical_price(&env, &pair, prune_ts);
+
+            // New data should exist
+            let new_price = get_historical_price(env, &pair, 8 * 86400);
             assert_eq!(new_price, Some(11_000_000));
         });
     }
 
     #[test]
     fn test_missing_data_points_in_window() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
             env.ledger().with_mut(|li| li.timestamp = 0);
-            store_price(&env, &pair, 10_000_000);
-            env.ledger().with_mut(|li| li.timestamp = 1800);
-            store_price(&env, &pair, 12_000_000);
+            let pair = test_pair(env);
+
+            // Store sparse data points
+            store_price(env, &pair, 10_000_000);
+            env.ledger().with_mut(|li| li.timestamp = 1800); // 30 min gap
+            store_price(env, &pair, 12_000_000);
+
             env.ledger().with_mut(|li| li.timestamp = 3600);
-            let twap = calculate_twap(&env, &pair, 3600).unwrap();
+            let twap = calculate_twap(env, &pair, 3600).unwrap();
+            // Should average only available data points
             assert_eq!(twap, 11_000_000);
         });
     }
 
     #[test]
     fn test_storage_overflow_handling() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            env.ledger().with_mut(|li| li.timestamp = 0);
-            store_price(&env, &pair, 10_000_000);
+        with_oracle_contract(|env| {
+            let pair = test_pair(env);
 
-            // Storing at bucket MAX_BUCKETS prunes bucket 0
-            let overflow_ts = MAX_BUCKETS * BUCKET_SIZE;
-            env.ledger().with_mut(|li| li.timestamp = overflow_ts);
-            store_price(&env, &pair, 10_000_000);
+            // Store max buckets + 1
+            for i in 0..(MAX_BUCKETS + 10) {
+                env.ledger().with_mut(|li| li.timestamp = i * BUCKET_SIZE);
+                store_price(env, &pair, 10_000_000);
+            }
 
-            let oldest = get_historical_price(&env, &pair, 0);
+            // Oldest data should be pruned
+            let oldest = get_historical_price(env, &pair, 0);
             assert_eq!(oldest, None);
         });
     }
 
     #[test]
     fn test_manipulation_detection() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
-            for i in 0..10u64 {
+        with_oracle_contract(|env| {
+            env.ledger().with_mut(|li| li.timestamp = 0);
+            let pair = test_pair(env);
+
+            // Store stable prices
+            for i in 0..10 {
                 env.ledger().with_mut(|li| li.timestamp = i * 300);
-                store_price(&env, &pair, 10_000_000);
+                store_price(env, &pair, 10_000_000);
             }
+
+            // Check deviation with manipulated price
             env.ledger().with_mut(|li| li.timestamp = 3000);
-            let deviation = get_twap_deviation(&env, &pair, 11_500_000, 3000).unwrap();
-            assert!(deviation > 1000);
+            let deviation = get_twap_deviation(env, &pair, 11_500_000, 3000).unwrap();
+            assert!(deviation > 1000); // >10% deviation indicates manipulation
         });
     }
 
     #[test]
     fn test_zero_price_twap_error() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair = test_pair(&env);
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
             env.ledger().with_mut(|li| li.timestamp = 1000);
-            store_price(&env, &pair, 0);
-            let result = get_twap_deviation(&env, &pair, 10_000_000, 600);
+            let pair = test_pair(env);
+
+            store_price(env, &pair, 0);
+
+            let result = get_twap_deviation(env, &pair, 10_000_000, 600);
             assert!(result.is_err());
             assert_eq!(result.unwrap_err(), OracleError::InvalidPrice);
         });
@@ -319,25 +345,28 @@ mod tests {
 
     #[test]
     fn test_multiple_pairs_isolation() {
-        let env = Env::default();
-        let contract = make_contract(&env);
-        let pair1 = test_pair(&env);
-        let pair2 = AssetPair {
-            base: Asset {
-                code: String::from_str(&env, "BTC"),
-                issuer: Some(Address::generate(&env)),
-            },
-            quote: Asset {
-                code: String::from_str(&env, "XLM"),
-                issuer: None,
-            },
-        };
-        env.as_contract(&contract, || {
+        with_oracle_contract(|env| {
+            let pair1 = test_pair(env);
+            let pair2 = AssetPair {
+                base: Asset {
+                    code: String::from_str(env, "BTC"),
+                    issuer: Some(Address::generate(env)),
+                },
+                quote: Asset {
+                    code: String::from_str(env, "XLM"),
+                    issuer: None,
+                },
+            };
+
             env.ledger().with_mut(|li| li.timestamp = 1000);
-            store_price(&env, &pair1, 10_000_000);
-            store_price(&env, &pair2, 50_000_000);
-            assert_eq!(get_historical_price(&env, &pair1, 1000), Some(10_000_000));
-            assert_eq!(get_historical_price(&env, &pair2, 1000), Some(50_000_000));
+            store_price(env, &pair1, 10_000_000);
+            store_price(env, &pair2, 50_000_000);
+
+            let price1 = get_historical_price(env, &pair1, 1000);
+            let price2 = get_historical_price(env, &pair2, 1000);
+
+            assert_eq!(price1, Some(10_000_000));
+            assert_eq!(price2, Some(50_000_000));
         });
     }
 }

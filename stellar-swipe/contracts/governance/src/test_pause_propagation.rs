@@ -57,21 +57,31 @@ fn init(c: &GovernanceContractClient<'_>, env: &Env, admin: &Address, r: &Distri
     );
 }
 
+fn prevent_auto_execution(c: &GovernanceContractClient<'_>, admin: &Address) {
+    c.configure_governance(
+        admin,
+        &crate::proposals::GovernanceConfig {
+            min_proposal_threshold: 1_000,
+            voting_period: 7 * 86_400,
+            voting_delay: 60,
+            quorum_threshold: 1_000,
+            approval_threshold: 5_000,
+            execution_delay: 3_600,
+        },
+    );
+}
+
 /// Stake enough for a user to have proposal-creation voting power.
 /// community_rewards holder starts with 300_000_000 balance.
-fn stake_tokens(
-    c: &GovernanceContractClient<'_>,
-    user: &Address,
-    amount: i128,
-) {
+fn stake_tokens(c: &GovernanceContractClient<'_>, user: &Address, amount: i128) {
     c.stake(user, &amount);
 }
 
-fn make_proposal(
-    c: &GovernanceContractClient<'_>,
-    env: &Env,
-    proposer: &Address,
-) -> u64 {
+fn stake_for_quorum(c: &GovernanceContractClient<'_>, user: &Address) {
+    c.stake(user, &120_000_000i128);
+}
+
+fn make_proposal(c: &GovernanceContractClient<'_>, env: &Env, proposer: &Address) -> u64 {
     c.create_proposal(
         proposer,
         &ProposalType::SignalProposal(String::from_str(env, "test")),
@@ -125,11 +135,7 @@ fn paused_blocks_cast_vote() {
     c.set_contract_paused(&admin, &true);
 
     let voter = Address::generate(&env);
-    let result = c.try_cast_vote(
-        &proposal_id,
-        &voter,
-        &crate::proposals::VoteType::For,
-    );
+    let result = c.try_cast_vote(&proposal_id, &voter, &crate::proposals::VoteType::For);
     assert_eq!(result, Err(Ok(GovernanceError::ContractPaused)));
 }
 
@@ -207,16 +213,21 @@ fn paused_blocks_queue_action() {
     let (env, id, admin, r) = setup();
     let c = client(&env, &id);
     init(&c, &env, &admin, &r);
+    prevent_auto_execution(&c, &admin);
 
     // Set up a succeeded proposal so queue_action would otherwise work
-    stake_tokens(&c, &r.community_rewards, 10_000);
+    stake_for_quorum(&c, &r.community_rewards);
     let proposal_id = make_proposal(&c, &env, &r.community_rewards);
 
     // Advance past voting, cast a winning vote, finalize
     env.ledger().set_timestamp(1_100);
-    c.cast_vote(&proposal_id, &r.community_rewards, &crate::proposals::VoteType::For);
+    c.cast_vote(
+        &proposal_id,
+        &r.community_rewards,
+        &crate::proposals::VoteType::For,
+    );
     env.ledger().set_timestamp(1_000 + 7 * 24 * 60 * 60 + 120);
-    c.finalize_proposal(&proposal_id);
+    assert_eq!(c.finalize_proposal(&proposal_id), ProposalStatus::Succeeded);
 
     // Initialize timelock
     let guardian = Address::generate(&env);
@@ -235,15 +246,20 @@ fn paused_blocks_execute_queued_action() {
     let (env, id, admin, r) = setup();
     let c = client(&env, &id);
     init(&c, &env, &admin, &r);
+    prevent_auto_execution(&c, &admin);
 
     // Build a queued action while unpaused
-    stake_tokens(&c, &r.community_rewards, 10_000);
+    stake_for_quorum(&c, &r.community_rewards);
     let proposal_id = make_proposal(&c, &env, &r.community_rewards);
 
     env.ledger().set_timestamp(1_100);
-    c.cast_vote(&proposal_id, &r.community_rewards, &crate::proposals::VoteType::For);
+    c.cast_vote(
+        &proposal_id,
+        &r.community_rewards,
+        &crate::proposals::VoteType::For,
+    );
     env.ledger().set_timestamp(1_000 + 7 * 24 * 60 * 60 + 120);
-    c.finalize_proposal(&proposal_id);
+    assert_eq!(c.finalize_proposal(&proposal_id), ProposalStatus::Succeeded);
 
     let guardian = Address::generate(&env);
     c.initialize_timelock(&admin, &3_600u64, &(7 * 86_400u64), &guardian);
@@ -251,7 +267,8 @@ fn paused_blocks_execute_queued_action() {
     let action_id = c.queue_action(&proposal_id);
 
     // Advance past minimum timelock delay
-    env.ledger().set_timestamp(1_000 + 7 * 24 * 60 * 60 + 120 + 3_601);
+    env.ledger()
+        .set_timestamp(1_000 + 7 * 24 * 60 * 60 + 120 + 3_601);
 
     // Now pause
     c.set_contract_paused(&admin, &true);
@@ -333,14 +350,19 @@ fn unpause_restores_timelock_queue() {
     let (env, id, admin, r) = setup();
     let c = client(&env, &id);
     init(&c, &env, &admin, &r);
+    prevent_auto_execution(&c, &admin);
 
     // Build a succeeded proposal
-    stake_tokens(&c, &r.community_rewards, 10_000);
+    stake_for_quorum(&c, &r.community_rewards);
     let proposal_id = make_proposal(&c, &env, &r.community_rewards);
     env.ledger().set_timestamp(1_100);
-    c.cast_vote(&proposal_id, &r.community_rewards, &crate::proposals::VoteType::For);
+    c.cast_vote(
+        &proposal_id,
+        &r.community_rewards,
+        &crate::proposals::VoteType::For,
+    );
     env.ledger().set_timestamp(1_000 + 7 * 24 * 60 * 60 + 120);
-    c.finalize_proposal(&proposal_id);
+    assert_eq!(c.finalize_proposal(&proposal_id), ProposalStatus::Succeeded);
 
     let guardian = Address::generate(&env);
     c.initialize_timelock(&admin, &3_600u64, &(7 * 86_400u64), &guardian);

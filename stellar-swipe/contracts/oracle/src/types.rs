@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, Env, Vec};
+use soroban_sdk::{contracttype, Address, Bytes};
 use stellar_swipe_common::AssetPair;
 
 #[contracttype]

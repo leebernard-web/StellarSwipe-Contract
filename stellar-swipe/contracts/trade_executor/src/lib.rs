@@ -1,7 +1,7 @@
 #![no_std]
 
-mod errors;
 pub mod dca;
+mod errors;
 pub mod keeper;
 mod oracle;
 pub mod risk_gates;
@@ -310,14 +310,12 @@ fn execute_market_copy_trade(
     env.storage().temporary().set(&lock_key, &true);
 
     // ── Daily volume limit check ───────────────────────────────────────────
-    let limit = batch_ctx
-        .map(|c| c.daily_limit)
-        .unwrap_or_else(|| {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DailyVolumeLimit)
-                .unwrap_or(0i128)
-        });
+    let limit = batch_ctx.map(|c| c.daily_limit).unwrap_or_else(|| {
+        env.storage()
+            .instance()
+            .get(&StorageKey::DailyVolumeLimit)
+            .unwrap_or(0i128)
+    });
     if limit > 0 {
         let today: u64 = env.ledger().timestamp() / 86_400;
         let day_key = StorageKey::DailyVolumeDay(user.clone());
@@ -1176,11 +1174,7 @@ impl TradeExecutorContract {
     }
 
     /// Manually cancel a DCA plan. Only the plan owner may cancel.
-    pub fn cancel_dca_plan(
-        env: Env,
-        user: Address,
-        signal_id: u64,
-    ) -> Result<(), ContractError> {
+    pub fn cancel_dca_plan(env: Env, user: Address, signal_id: u64) -> Result<(), ContractError> {
         user.require_auth();
         dca::cancel_dca_plan(&env, &user, signal_id)
     }

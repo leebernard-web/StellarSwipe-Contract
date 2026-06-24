@@ -30,17 +30,15 @@ pub fn get_provider_monthly_report(
     let month_start = calculate_month_start(month, year);
     let month_end = month_start + SECONDS_PER_MONTH;
 
-    for i in 0..signals_map.len() {
-        if let Some(signal) = signals_map.get(i as u64) {
+    for key in signals_map.keys() {
+        if let Some(signal) = signals_map.get(key) {
             if signal.provider != *provider {
                 continue;
             }
 
             if signal.timestamp >= month_start && signal.timestamp < month_end {
                 report.signals_submitted += 1;
-                report.total_adopters = report
-                    .total_adopters
-                    .saturating_add(signal.adoption_count);
+                report.total_adopters = report.total_adopters.saturating_add(signal.adoption_count);
 
                 if matches!(
                     signal.status,
@@ -106,7 +104,7 @@ fn days_in_month(month: u32) -> u64 {
 mod tests {
     use super::*;
     use crate::categories::{RiskLevel, SignalCategory};
-    use crate::types::{SignalAction, Signal};
+    use crate::types::{Signal, SignalAction};
     use soroban_sdk::{testutils::Address as _, Address, Env, Map, String};
 
     fn create_test_signal(
@@ -126,9 +124,13 @@ mod tests {
             rationale: String::from_str(env, "Test"),
             timestamp,
             expiry: timestamp + 86_400,
-            status,
+            status: status.clone(),
             executions: 1,
-            successful_executions: if status == SignalStatus::Successful { 1 } else { 0 },
+            successful_executions: if status == SignalStatus::Successful {
+                1
+            } else {
+                0
+            },
             total_volume: 1000,
             total_roi,
             category: SignalCategory::SWING,
