@@ -664,7 +664,7 @@ impl GovernanceContract {
         limit: u32,
     ) -> Result<Vec<(Address, u32)>, GovernanceError> {
         require_initialized(&env)?;
-        Ok(get_reputation_leaderboard(&env, limit))
+        get_reputation_leaderboard(&env, limit)
     }
 
     pub fn distribute_reputation_rewards(

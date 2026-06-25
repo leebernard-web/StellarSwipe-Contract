@@ -7,6 +7,7 @@ use crate::{checked_mul, GovernanceError, StorageKey};
 
 const PRECISION: i128 = 10_000;
 const MAX_REPUTATION: u32 = 10_000;
+pub const MAX_REPUTATION_USERS: u32 = 100;
 
 // ── Decay Schedule Tiers ─────────────────────────────────────────────────
 
@@ -473,8 +474,11 @@ pub fn cast_reputation_weighted_vote(
     Ok(())
 }
 
-pub fn get_reputation_leaderboard(env: &Env, limit: u32) -> Vec<(Address, u32)> {
+pub fn get_reputation_leaderboard(env: &Env, limit: u32) -> Result<Vec<(Address, u32)>, GovernanceError> {
     let state = get_reputation_state(env);
+    if state.users.len() > MAX_REPUTATION_USERS {
+        return Err(GovernanceError::IterationLimitExceeded);
+    }
     let mut sorted: Vec<(Address, u32)> = Vec::new(env);
 
     let mut i = 0;
@@ -505,7 +509,7 @@ pub fn get_reputation_leaderboard(env: &Env, limit: u32) -> Vec<(Address, u32)> 
         out.push_back(sorted.get(idx).unwrap());
         idx += 1;
     }
-    out
+    Ok(out)
 }
 
 pub fn distribute_reputation_rewards(
@@ -516,7 +520,7 @@ pub fn distribute_reputation_rewards(
         return Err(GovernanceError::InvalidAmount);
     }
 
-    let leaders = get_reputation_leaderboard(env, 100);
+    let leaders = get_reputation_leaderboard(env, 100)?;
     let mut total_reputation = 0u32;
     let mut i = 0;
     while i < leaders.len() {

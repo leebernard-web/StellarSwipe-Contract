@@ -10,6 +10,7 @@ use stellar_swipe_common::Asset;
 
 use crate::{
     set_pending_fees, set_treasury_balance, ContractError, FeeCollector, FeeCollectorClient,
+    MAX_AUDIT_TOKENS,
 };
 
 /// Pre-mark a trader as having already completed their first trade,
@@ -1273,3 +1274,41 @@ fn test_audit_balances_not_initialized() {
     let result = client.try_audit_balances(&tokens);
     assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
 }
+
+#[test]
+fn test_audit_balances_limit_at_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_recipient, _token, _contract_id, client) = setup(&env, 1000);
+
+    let mut tokens = soroban_sdk::Vec::new(&env);
+    for _ in 0..MAX_AUDIT_TOKENS {
+        let token = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        tokens.push_back(token);
+    }
+
+    let result = client.try_audit_balances(&tokens);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_audit_balances_limit_over_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_recipient, _token, _contract_id, client) = setup(&env, 1000);
+
+    let mut tokens = soroban_sdk::Vec::new(&env);
+    for _ in 0..=MAX_AUDIT_TOKENS {
+        let token = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        tokens.push_back(token);
+    }
+
+    let result = client.try_audit_balances(&tokens);
+    assert_eq!(result, Err(Ok(ContractError::IterationLimitExceeded)));
+}
+
+

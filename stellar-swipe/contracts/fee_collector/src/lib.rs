@@ -65,6 +65,9 @@ pub fn fee_amount_floor(trade_amount: i128, fee_rate_bps: u32) -> Option<i128> {
 /// Maximum fee collections per `batch_collect_fees` call.
 pub const MAX_BATCH_FEE_SIZE: u32 = 20;
 
+/// Maximum tokens allowed to be audited in a single call.
+pub const MAX_AUDIT_TOKENS: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct BatchFeeInput {
@@ -205,6 +208,9 @@ impl FeeCollector {
     ) -> Result<Vec<BalanceMismatch>, ContractError> {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
+        }
+        if tokens.len() > MAX_AUDIT_TOKENS {
+            return Err(ContractError::IterationLimitExceeded);
         }
         let mut mismatches = Vec::new(&env);
         for token in tokens.iter() {

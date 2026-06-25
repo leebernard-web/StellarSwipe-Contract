@@ -2372,3 +2372,31 @@ fn voting_power_uses_snapshot_not_live_balance() {
     let result = client.try_cast_vote(&proposal_id, &late_staker, &GovernanceVoteType::For);
     assert_eq!(result, Err(Ok(GovernanceError::NoVotingPower)));
 }
+
+#[test]
+fn test_reputation_leaderboard_limit() {
+    let (env, contract_id, admin, recipients) = setup();
+    let client = client(&env, &contract_id);
+    initialize(&client, &env, &admin, &recipients);
+
+    use crate::reputation::MAX_REPUTATION_USERS;
+
+    // Populate MAX_REPUTATION_USERS users
+    for _ in 0..MAX_REPUTATION_USERS {
+        let user = Address::generate(&env);
+        client.refresh_reputation(&user);
+    }
+
+    // Leaderboard query at limit should succeed
+    let res = client.try_reputation_leaderboard(&10);
+    assert!(res.is_ok());
+
+    // Add one more user (over limit)
+    let user = Address::generate(&env);
+    client.refresh_reputation(&user);
+
+    // Leaderboard query should now fail with IterationLimitExceeded (mapped to InvalidCommitteeAction)
+    let res = client.try_reputation_leaderboard(&10);
+    assert_eq!(res, Err(Ok(GovernanceError::IterationLimitExceeded)));
+}
+

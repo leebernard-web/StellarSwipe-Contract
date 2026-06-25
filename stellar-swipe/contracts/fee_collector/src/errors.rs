@@ -23,4 +23,5 @@ pub enum ContractError {
     NetworkConditionInvalid = 17,
     FailedCollectionNotFound = 18,
     RetryLimitExceeded = 19,
+    IterationLimitExceeded = 20,
 }

@@ -69,4 +69,5 @@ impl GovernanceError {
     pub const ApprovedCapExceeded: GovernanceError = GovernanceError::BudgetExceeded;
     pub const ContractPaused: GovernanceError = GovernanceError::Unauthorized;
     pub const InvalidCalibrationConfig: GovernanceError = GovernanceError::InvalidGovernanceConfig;
+    pub const IterationLimitExceeded: GovernanceError = GovernanceError::InvalidCommitteeAction;
 }

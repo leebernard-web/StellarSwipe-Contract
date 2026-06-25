@@ -57,6 +57,14 @@ jobs:
       - name: Tests
         run: cd stellar-swipe && cargo test --workspace --all-targets
 
+      # Audit dependency versions consistency
+      - name: Audit workspace dependencies
+        run: python3 stellar-swipe/scripts/audit_dependencies.py
+
+      # Verify #![no_std] compliance of contract crates
+      - name: Verify #![no_std] compliance
+        run: python3 stellar-swipe/scripts/verify_no_std.py
+
       # Release WASM (workspace [profile.release]) + stellar contract optimize
       # Prebuilt release binary — avoids compiling libdbus-sys from source via cargo install
       - name: Install Stellar CLI

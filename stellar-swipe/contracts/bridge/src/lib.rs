@@ -30,6 +30,7 @@ pub enum BridgeError {
     /// Withdrawal exceeds the dynamic limit derived from available liquidity buffer.
     /// Distinct from DailyLimitExceeded (static anti-spam) so callers can differentiate.
     DynamicLiquidityLimitExceeded = 15,
+    InvalidThreshold = 16,
 }
 
 #[contracttype]
@@ -122,6 +123,8 @@ pub enum DataKey {
     DailyVolume,
     /// Admin-set available liquidity buffer for dynamic rate limiting.
     LiquidityBuffer,
+    TotalMinted,
+    ReserveThreshold,
 }
 
 const DAY_SECONDS: u64 = 86_400;
@@ -365,6 +368,11 @@ impl BridgeContract {
             .persistent()
             .set(&balance_key, &(balance + transfer.amount));
 
+        let total_minted: i128 = env.storage().persistent().get(&DataKey::TotalMinted).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalMinted, &(total_minted + transfer.amount));
+
         transfer.status = TransferStatus::Completed;
         transfer.executed_at = Some(env.ledger().timestamp());
         store_transfer(&env, &transfer);
@@ -401,6 +409,11 @@ impl BridgeContract {
         env.storage()
             .persistent()
             .set(&balance_key, &(balance - amount));
+
+        let total_minted: i128 = env.storage().persistent().get(&DataKey::TotalMinted).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalMinted, &(total_minted - amount));
 
         let mut config = get_config(&env)?;
         let transfer_id = config.next_transfer_id;
@@ -525,6 +538,61 @@ impl BridgeContract {
             .persistent()
             .get(&DataKey::WrappedBalance(user, wrapped_asset))
             .unwrap_or(0)
+    }
+
+    pub fn attest_reserves(
+        env: Env,
+        caller: Address,
+        actual_locked: i128,
+    ) -> Result<(), BridgeError> {
+        if !cfg!(test) {
+            caller.require_auth();
+        }
+        if actual_locked < 0 {
+            return Err(BridgeError::InvalidAmount);
+        }
+
+        let total_minted = env.storage().persistent().get(&DataKey::TotalMinted).unwrap_or(0i128);
+        let threshold = env.storage().persistent().get(&DataKey::ReserveThreshold).unwrap_or(9500u32);
+
+        let ratio = if total_minted > 0 {
+            (actual_locked * 10000) / total_minted
+        } else {
+            10000
+        };
+
+        let healthy = ratio >= threshold as i128;
+
+        env.events().publish(
+            (Symbol::new(&env, "reserve_attestation"), healthy),
+            (actual_locked, total_minted, ratio, threshold),
+        );
+
+        Ok(())
+    }
+
+    pub fn set_reserve_threshold(
+        env: Env,
+        admin: Address,
+        threshold_bps: u32,
+    ) -> Result<(), BridgeError> {
+        require_admin(&env, &admin)?;
+        if !cfg!(test) {
+            admin.require_auth();
+        }
+        if threshold_bps > 10000 {
+            return Err(BridgeError::InvalidThreshold);
+        }
+        env.storage().persistent().set(&DataKey::ReserveThreshold, &threshold_bps);
+        Ok(())
+    }
+
+    pub fn get_reserve_threshold(env: Env) -> u32 {
+        env.storage().persistent().get(&DataKey::ReserveThreshold).unwrap_or(9500u32)
+    }
+
+    pub fn get_total_minted(env: Env) -> i128 {
+        env.storage().persistent().get(&DataKey::TotalMinted).unwrap_or(0)
     }
 
     pub fn create_liquidity_pool(
@@ -1076,6 +1144,54 @@ mod test {
                 String::from_str(&env, "0xc"), 3,
                 String::from_str(&env, "r"),
             ).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_reserve_attestation_healthy_and_unhealthy() {
+        let (env, contract_id, admin, validators) = setup();
+        let user = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            init(&env, &admin, &validators);
+
+            // Get default reserve threshold (9500 bps = 95%)
+            assert_eq!(BridgeContract::get_reserve_threshold(env.clone()), 9500);
+
+            // Total minted is 0 at start
+            assert_eq!(BridgeContract::get_total_minted(env.clone()), 0);
+
+            // Perform lock-mint to mint 1000 tokens
+            let transfer_id = BridgeContract::initiate_lock_mint(
+                env.clone(), user.clone(),
+                ChainId::Ethereum, ChainId::Polygon,
+                String::from_str(&env, "ETH"), String::from_str(&env, "wETH"),
+                1000,
+                String::from_str(&env, "0xa"), 1,
+                String::from_str(&env, "r"),
+            ).unwrap();
+
+            BridgeContract::approve_lock_mint(env.clone(), validators.get(0).unwrap(), transfer_id, String::from_str(&env, "sig1")).unwrap();
+            BridgeContract::approve_lock_mint(env.clone(), validators.get(1).unwrap(), transfer_id, String::from_str(&env, "sig2")).unwrap();
+            BridgeContract::execute_lock_mint(env.clone(), admin.clone(), transfer_id).unwrap();
+
+            // Total minted should now be 1000
+            assert_eq!(BridgeContract::get_total_minted(env.clone()), 1000);
+
+            // Attest healthy reserve: 990 locked (990/1000 = 99% >= 95%)
+            let attest_res = BridgeContract::attest_reserves(env.clone(), user.clone(), 990);
+            assert!(attest_res.is_ok());
+
+            // Attest unhealthy reserve: 900 locked (900/1000 = 90% < 95%)
+            let attest_res_unhealthy = BridgeContract::attest_reserves(env.clone(), user.clone(), 900);
+            assert!(attest_res_unhealthy.is_ok());
+
+            // Change threshold to 8000 bps (80%)
+            BridgeContract::set_reserve_threshold(env.clone(), admin.clone(), 8000).unwrap();
+            assert_eq!(BridgeContract::get_reserve_threshold(env.clone()), 8000);
+
+            // Now 900 locked is healthy (900/1000 = 90% >= 80%)
+            let attest_res_healthy_now = BridgeContract::attest_reserves(env.clone(), user.clone(), 900);
+            assert!(attest_res_healthy_now.is_ok());
         });
     }
 }

@@ -1,6 +1,6 @@
 //! User portfolio contract: positions and `get_pnl` (source of truth for portfolio performance).
 
-#![cfg_attr(target_family = "wasm", no_std)]
+#![no_std]
 
 mod achievements;
 mod badges;
