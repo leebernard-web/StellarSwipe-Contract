@@ -5,6 +5,7 @@ mod committees;
 mod conviction_voting;
 mod distribution;
 mod errors;
+mod proposal_deposit;
 mod proposals;
 mod quadratic_voting;
 mod reputation;
@@ -125,6 +126,10 @@ pub enum StorageKey {
     ReputationConfig,
     /// Conviction calibration configuration (penalty, reward, cap parameters).
     ConvictionCalibration,
+    /// Spam-deposit configuration for proposal creation.
+    DepositConfig,
+    /// Address of the treasury wallet for forfeited deposits.
+    TreasuryAddress,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -264,6 +269,10 @@ impl GovernanceContract {
         track_holder(&env, &recipients.community_rewards);
         track_holder(&env, &recipients.treasury);
         track_holder(&env, &recipients.public_sale);
+        // Record treasury address for deposit settlement
+        env.storage()
+            .instance()
+            .set(&StorageKey::TreasuryAddress, &recipients.treasury);
 
         emit_initialized(&env, &admin, &name, &symbol, total_supply);
         emit_distribution_initialized(&env, &distribution);
@@ -350,6 +359,25 @@ impl GovernanceContract {
         proposals::configure_governance(&env, &admin, config)
     }
 
+    /// Configure the spam-deposit requirement for proposal creation.
+    ///
+    /// `config.amount` is the token amount locked from the proposer. Set to 0
+    /// to disable deposits. `config.min_participation_bps` is the minimum
+    /// participation (total_votes / total_supply, in bps) needed for a refund.
+    pub fn set_deposit_config(
+        env: Env,
+        admin: Address,
+        config: proposal_deposit::DepositConfig,
+    ) -> Result<(), GovernanceError> {
+        require_initialized(&env)?;
+        proposal_deposit::set_deposit_config(&env, &admin, config)
+    }
+
+    /// Return the current proposal spam-deposit configuration.
+    pub fn get_deposit_config(env: Env) -> proposal_deposit::DepositConfig {
+        proposal_deposit::get_deposit_config(&env)
+    }
+
     /// # Summary
     /// Create a new governance proposal. Proposer must have staked voting power
     /// >= `min_proposal_threshold`.
@@ -388,6 +416,7 @@ impl GovernanceContract {
             description,
             execution_payload,
         )?;
+        proposal_deposit::lock_proposal_deposit(&env, proposal_id, &proposer)?;
         let _ = record_proposal_creation(&env, proposer);
         Ok(proposal_id)
     }
@@ -443,6 +472,26 @@ impl GovernanceContract {
         require_not_paused(&env)?;
         let status = proposals::finalize_proposal(&env, proposal_id)?;
         let _ = record_proposal_outcome(&env, proposal_id);
+        // Settle spam-deposit: refund or forfeit based on participation.
+        let proposal = proposals::get_proposal(&env, proposal_id)
+            .unwrap_or_else(|_| panic!("proposal missing after finalize"));
+        let total_votes = proposal
+            .votes_for
+            .saturating_add(proposal.votes_against)
+            .saturating_add(proposal.votes_abstain);
+        let total_supply = get_total_supply(&env).unwrap_or(0);
+        let treasury: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TreasuryAddress)
+            .unwrap_or_else(|| proposal.proposer.clone());
+        let _ = proposal_deposit::settle_proposal_deposit(
+            &env,
+            proposal_id,
+            total_votes,
+            total_supply,
+            &treasury,
+        );
         Ok(status)
     }
 
@@ -1500,6 +1549,11 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), GovernanceError> {
         return Err(GovernanceError::Unauthorized);
     }
     Ok(())
+}
+
+/// Crate-visible alias used by sub-modules (e.g. proposal_deposit).
+pub(crate) fn require_admin_pub(env: &Env, caller: &Address) -> Result<(), GovernanceError> {
+    require_admin(env, caller)
 }
 
 fn balances(env: &Env) -> Map<Address, i128> {

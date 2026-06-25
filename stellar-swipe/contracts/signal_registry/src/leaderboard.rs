@@ -63,6 +63,14 @@ pub enum LeaderboardKey {
 
 // ── Index entry ───────────────────────────────────────────────────────────────
 
+/// # Tie-breaking rule (applied when primary scores are equal)
+///
+/// 1. **Earlier registration timestamp** ranks higher (smaller `registered_at` wins).
+/// 2. **Lexicographic address bytes** as a final fallback for byte-exact determinism
+///    (earlier / smaller raw bytes wins).
+///
+/// This guarantees repeated queries against unchanged data always return entries
+/// in the same order regardless of insertion order.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct IndexEntry {
@@ -73,6 +81,8 @@ pub struct IndexEntry {
     pub total_profit_delta: i128,
     pub stake_amount: i128,
     pub verified: bool,
+    /// Ledger timestamp when this provider first registered (used for tie-breaking).
+    pub registered_at: u64,
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -112,9 +122,28 @@ where
     let entry_score = score_fn(&entry);
     let mut insert_at = without.len();
     for i in 0..without.len() {
-        if score_fn(&without.get(i).unwrap()) < entry_score {
+        let existing = without.get(i).unwrap();
+        let existing_score = score_fn(&existing);
+        if existing_score < entry_score {
             insert_at = i;
             break;
+        }
+        // Tie-break: same primary score
+        if existing_score == entry_score {
+            // Rule 1: earlier registration timestamp ranks higher
+            if entry.registered_at < existing.registered_at {
+                insert_at = i;
+                break;
+            }
+            if entry.registered_at == existing.registered_at {
+                // Rule 2: lexicographic address bytes — smaller raw bytes ranks higher
+                let entry_bytes = entry.provider.to_string();
+                let existing_bytes = existing.provider.to_string();
+                if entry_bytes < existing_bytes {
+                    insert_at = i;
+                    break;
+                }
+            }
         }
     }
 
@@ -146,6 +175,13 @@ pub fn update_leaderboard_index(env: &Env, provider: Address, stats: &ProviderPe
         .successful_signals
         .saturating_add(stats.failed_signals);
 
+    // Retrieve registration timestamp for tie-breaking; fall back to 0 if not
+    // yet profiled (providers registered before the profile feature are sorted
+    // after properly-profiled ones with the same score).
+    let registered_at = crate::providers::get_provider_profile(env, &provider)
+        .map(|p| p.created_at)
+        .unwrap_or(0);
+
     let entry = IndexEntry {
         provider: provider.clone(),
         closed_signals,
@@ -154,6 +190,7 @@ pub fn update_leaderboard_index(env: &Env, provider: Address, stats: &ProviderPe
         total_profit_delta: stats.avg_return.saturating_mul(closed_signals as i128),
         stake_amount,
         verified,
+        registered_at,
     };
 
     let mut sr = load_index(env, LeaderboardKey::SuccessRateIndex);
@@ -471,6 +508,94 @@ mod tests {
             assert_eq!(lb.len(), 1);
             let lb_f = get_leaderboard(&env, &empty_map, LeaderboardMetric::Followers, 10);
             assert_eq!(lb_f.len(), 0);
+        });
+    }
+
+    // ── Tie-breaking tests (#611) ─────────────────────────────────────────────
+
+    /// Helper: build an IndexEntry directly so `registered_at` can be controlled.
+    fn make_entry(env: &Env, provider: Address, success_rate: u32, registered_at: u64) -> IndexEntry {
+        IndexEntry {
+            provider,
+            closed_signals: 10,
+            success_rate,
+            total_adopters: 5,
+            total_profit_delta: 0,
+            stake_amount: 0,
+            verified: false,
+            registered_at,
+        }
+    }
+
+    /// Two providers with identical success-rate scores: the one that registered
+    /// *earlier* (smaller `registered_at`) must rank first.
+    #[test]
+    fn test_tiebreak_earlier_registration_ranks_higher() {
+        let env = Env::default();
+        let cid = env.register(TestContract, ());
+        env.as_contract(&cid, || {
+            let p_early = Address::generate(&env);
+            let p_late = Address::generate(&env);
+
+            let score = 7500u32;
+            let mut idx = Vec::new(&env);
+            // Insert later-registered first, then earlier-registered
+            upsert_sorted(&env, &mut idx, make_entry(&env, p_late.clone(), score, 2000), |e| e.success_rate as i128);
+            upsert_sorted(&env, &mut idx, make_entry(&env, p_early.clone(), score, 1000), |e| e.success_rate as i128);
+
+            // Earlier registration (t=1000) should rank first
+            assert_eq!(idx.get(0).unwrap().provider, p_early);
+            assert_eq!(idx.get(1).unwrap().provider, p_late);
+        });
+    }
+
+    /// Repeated queries must return the exact same order (no non-determinism).
+    #[test]
+    fn test_tiebreak_repeated_queries_stable() {
+        let env = Env::default();
+        let cid = env.register(TestContract, ());
+        env.as_contract(&cid, || {
+            let p1 = Address::generate(&env);
+            let p2 = Address::generate(&env);
+            let p3 = Address::generate(&env);
+
+            let stats = make_stats(8000, 10, 50, 5, 5);
+            update_leaderboard_index(&env, p1.clone(), &stats);
+            update_leaderboard_index(&env, p2.clone(), &stats);
+            update_leaderboard_index(&env, p3.clone(), &stats);
+
+            // Query three times — result must be identical every time
+            let q1 = get_provider_leaderboard(&env, ProviderMetric::BySuccessRate, 10);
+            let q2 = get_provider_leaderboard(&env, ProviderMetric::BySuccessRate, 10);
+            let q3 = get_provider_leaderboard(&env, ProviderMetric::BySuccessRate, 10);
+
+            assert_eq!(q1.len(), q2.len());
+            assert_eq!(q2.len(), q3.len());
+            for i in 0..q1.len() {
+                assert_eq!(q1.get(i).unwrap().provider, q2.get(i).unwrap().provider);
+                assert_eq!(q2.get(i).unwrap().provider, q3.get(i).unwrap().provider);
+            }
+        });
+    }
+
+    /// Entries with *distinct* primary scores must not be reordered by tie-breaking.
+    #[test]
+    fn test_tiebreak_does_not_alter_distinct_score_order() {
+        let env = Env::default();
+        let cid = env.register(TestContract, ());
+        env.as_contract(&cid, || {
+            let p_high = Address::generate(&env);
+            let p_low = Address::generate(&env);
+
+            let mut idx = Vec::new(&env);
+            // p_high has score 9000, p_low has score 6000
+            // p_high registered later — tie-break would put p_low first if primary score didn't dominate
+            upsert_sorted(&env, &mut idx, make_entry(&env, p_high.clone(), 9000, 5000), |e| e.success_rate as i128);
+            upsert_sorted(&env, &mut idx, make_entry(&env, p_low.clone(), 6000, 1000), |e| e.success_rate as i128);
+
+            // Higher primary score must still win regardless of registration time
+            assert_eq!(idx.get(0).unwrap().provider, p_high);
+            assert_eq!(idx.get(1).unwrap().provider, p_low);
         });
     }
 }
