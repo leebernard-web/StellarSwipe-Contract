@@ -55,6 +55,8 @@ pub enum ContractError {
     CircuitBreakerActive = 22,
     /// The requested feature is administratively disabled via the feature flag registry.
     FeatureDisabled = 23,
+    /// A replayed transaction was detected (nonce mismatch, duplicate hash, or expired).
+    ReplayDetected = 24,
 }
 
 /// Populated when [`ContractError::InsufficientLiquidity`] is returned.

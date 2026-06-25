@@ -17,9 +17,10 @@ use risk_gates::{
 };
 use sdex::{execute_sdex_swap, min_received_from_slippage};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, Env, IntoVal, String, Symbol, Val, Vec,
+    contract, contractimpl, contracttype, Address, Bytes, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
+use stellar_swipe_common::replay_protection::verify_and_commit;
 use triggers::{ORACLE_KEY, PORTFOLIO_KEY};
 use wire::TRADE_TIMEOUT_LEDGERS;
 
@@ -718,6 +719,10 @@ impl TradeExecutorContract {
 
     /// Execute a copy trade.
     ///
+    /// Accepts replay-protection parameters (`nonce`, `tx_hash`, `expiry_ts`) so that
+    /// the caller can provide a strictly increasing nonce and a unique transaction hash
+    /// to prevent replay attacks.
+    ///
     /// ## Cross-contract call budget (Issue #306 optimization)
     /// | # | Callee            | Purpose                                      |
     /// |---|-------------------|----------------------------------------------|
@@ -734,7 +739,12 @@ impl TradeExecutorContract {
         portfolio_pct_bps: Option<u32>,
         order_type: OrderType,
         limit_price: Option<i128>,
+        nonce: u64,
+        tx_hash: Bytes,
+        expiry_ts: u64,
     ) -> Result<(), ContractError> {
+        verify_and_commit(&env, &user, nonce, tx_hash, expiry_ts)
+            .map_err(|_| ContractError::ReplayDetected)?;
         feature_flags::require_feature_enabled(&env, feature_flags::FEAT_COPY_TRADE)?;
         match order_type {
             OrderType::Market => {
@@ -1024,6 +1034,9 @@ impl TradeExecutorContract {
     /// entry (scaled by [`ENTRY_PRICE_DENOMINATOR`]).  
     /// Realized P&L = `exit_price - (amount × entry_price / ENTRY_PRICE_DENOMINATOR)`,
     /// which expresses both terms in `to_token` units.
+    ///
+    /// Replay-protection parameters (`nonce`, `tx_hash`, `expiry_ts`) are verified
+    /// via [`verify_and_commit`] before the swap executes.
     pub fn cancel_copy_trade(
         env: Env,
         caller: Address,
@@ -1034,7 +1047,12 @@ impl TradeExecutorContract {
         amount: i128,
         min_received: i128,
         entry_price: i128,
+        nonce: u64,
+        tx_hash: Bytes,
+        expiry_ts: u64,
     ) -> Result<(), ContractError> {
+        verify_and_commit(&env, &user, nonce, tx_hash, expiry_ts)
+            .map_err(|_| ContractError::ReplayDetected)?;
         caller.require_auth();
         if caller != user {
             return Err(ContractError::Unauthorized);
