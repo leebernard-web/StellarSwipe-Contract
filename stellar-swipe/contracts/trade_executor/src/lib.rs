@@ -70,6 +70,10 @@ pub enum StorageKey {
 const EXECUTION_LOCK: &str = "ExecLock";
 pub const CIRCUIT_BREAKER_DURATION_LEDGERS: u32 = 720;
 
+/// Denominator used to convert `entry_price * amount` into `to_token` units.
+/// Entry prices are expected to be in 7‑decimal format (e.g. 10_000_000 = 1.0).
+const ENTRY_PRICE_DENOMINATOR: i128 = 10_000_000;
+
 /// A single trade input for [`TradeExecutorContract::batch_execute`].
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1015,6 +1019,11 @@ impl TradeExecutorContract {
 
     /// Cancel a copy trade manually: executes a SDEX swap to close the position,
     /// records exit in UserPortfolio, and emits `TradeCancelled`.
+    ///
+    /// `entry_price` is the per-unit price of `from_token` in `to_token` terms at
+    /// entry (scaled by [`ENTRY_PRICE_DENOMINATOR`]).  
+    /// Realized P&L = `exit_price - (amount × entry_price / ENTRY_PRICE_DENOMINATOR)`,
+    /// which expresses both terms in `to_token` units.
     pub fn cancel_copy_trade(
         env: Env,
         caller: Address,
@@ -1024,6 +1033,7 @@ impl TradeExecutorContract {
         to_token: Address,
         amount: i128,
         min_received: i128,
+        entry_price: i128,
     ) -> Result<(), ContractError> {
         caller.require_auth();
         if caller != user {
@@ -1056,7 +1066,13 @@ impl TradeExecutorContract {
         let exit_price =
             execute_sdex_swap(&env, &router, &from_token, &to_token, amount, min_received)?;
 
-        let realized_pnl = exit_price - amount;
+        // Convert the entry-position value to `to_token` units so that both
+        // `exit_price` and the entry value are expressed in the same asset unit.
+        let entry_value = amount
+            .checked_mul(entry_price)
+            .ok_or(ContractError::InvalidAmount)?
+            / ENTRY_PRICE_DENOMINATOR;
+        let realized_pnl = exit_price - entry_value;
         let close_sym = Symbol::new(&env, "close_position");
         let mut close_args = Vec::<Val>::new(&env);
         close_args.push_back(user.clone().into_val(&env));

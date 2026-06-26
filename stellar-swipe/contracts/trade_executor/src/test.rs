@@ -699,7 +699,9 @@ fn swap_with_slippage_reverts_when_exceeded() {
 #[derive(Clone)]
 enum PortfolioKey {
     Position(Address, u64),
+    EntryPrice(Address, u64),
     LastClosed,
+    LastPnl,
 }
 
 #[contract]
@@ -712,22 +714,50 @@ impl MockPortfolioWithPositions {
             .instance()
             .set(&PortfolioKey::Position(user, trade_id), &true);
     }
+    pub fn add_position_with_entry_price(
+        env: Env,
+        user: Address,
+        trade_id: u64,
+        entry_price: i128,
+    ) {
+        env.storage()
+            .instance()
+            .set(&PortfolioKey::Position(user.clone(), trade_id), &true);
+        env.storage()
+            .instance()
+            .set(&PortfolioKey::EntryPrice(user, trade_id), &entry_price);
+    }
     pub fn has_position(env: Env, user: Address, trade_id: u64) -> bool {
         env.storage()
             .instance()
             .get(&PortfolioKey::Position(user, trade_id))
             .unwrap_or(false)
     }
-    pub fn close_position(env: Env, user: Address, trade_id: u64, _pnl: i128) {
+    pub fn get_entry_price(env: Env, user: Address, trade_id: u64) -> i128 {
         env.storage()
             .instance()
-            .remove(&PortfolioKey::Position(user, trade_id));
+            .get(&PortfolioKey::EntryPrice(user, trade_id))
+            .unwrap_or(10_000_000) // default 1:1 rate
+    }
+    pub fn close_position(env: Env, user: Address, trade_id: u64, pnl: i128) {
+        env.storage()
+            .instance()
+            .remove(&PortfolioKey::Position(user.clone(), trade_id));
+        env.storage()
+            .instance()
+            .remove(&PortfolioKey::EntryPrice(user, trade_id));
         env.storage()
             .instance()
             .set(&PortfolioKey::LastClosed, &trade_id);
+        env.storage()
+            .instance()
+            .set(&PortfolioKey::LastPnl, &pnl);
     }
     pub fn last_closed(env: Env) -> Option<u64> {
         env.storage().instance().get(&PortfolioKey::LastClosed)
+    }
+    pub fn last_pnl(env: Env) -> Option<i128> {
+        env.storage().instance().get(&PortfolioKey::LastPnl)
     }
     pub fn validate_and_record(_env: Env, _user: Address, _max_positions: u32) -> u32 {
         1
@@ -766,9 +796,11 @@ fn cancel_copy_trade_success() {
     let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_100_000);
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
 
-    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &1u64);
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position_with_entry_price(
+        &user, &1u64, &10_000_000i128,
+    );
     exec.cancel_copy_trade(
-        &user, &user, &1u64, &token_a, &token_b, &1_000_000, &900_000,
+        &user, &user, &1u64, &token_a, &token_b, &1_000_000, &900_000, &10_000_000,
     );
 
     assert_eq!(
@@ -783,7 +815,9 @@ fn cancel_copy_trade_unauthorized() {
     let attacker = Address::generate(&env);
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
 
-    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &1u64);
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position_with_entry_price(
+        &user, &1u64, &10_000_000i128,
+    );
 
     let err = env.as_contract(&exec_id, || {
         TradeExecutorContract::cancel_copy_trade(
@@ -795,6 +829,7 @@ fn cancel_copy_trade_unauthorized() {
             token_b,
             1_000_000,
             900_000,
+            10_000_000,
         )
     });
     assert_eq!(err, Err(ContractError::Unauthorized));
@@ -816,6 +851,7 @@ fn cancel_copy_trade_not_found() {
             token_b,
             1_000_000,
             900_000,
+            10_000_000,
         )
     });
     assert_eq!(err, Err(ContractError::TradeNotFound));
@@ -826,21 +862,22 @@ fn cancel_copy_trade_pnl_calculation() {
     let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_200_000);
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
 
-    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &2u64);
+    // entry_price = 9_500_000 → 0.95 to_token per 1 from_token
+    // amount = 1_000_000 from_token
+    // entry_value = 1_000_000 * 9_500_000 / 10_000_000 = 950_000 to_token
+    // exit_price = 1_200_000 to_token
+    // realized_pnl = 1_200_000 - 950_000 = 250_000
+    let portfolio = MockPortfolioWithPositionsClient::new(&env, &portfolio_id);
+    portfolio.add_position_with_entry_price(&user, &2u64, &9_500_000i128);
     exec.cancel_copy_trade(
-        &user, &user, &2u64, &token_a, &token_b, &1_000_000, &900_000,
+        &user, &user, &2u64, &token_a, &token_b, &1_000_000, &900_000, &9_500_000,
     );
 
-    let found = env.events().all().iter().any(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
-        topics
-            .get(0)
-            .and_then(|v| soroban_sdk::Symbol::try_from_val(&env, &v).ok())
-            .map(|s| s == soroban_sdk::Symbol::new(&env, "trade_executor"))
-            .unwrap_or(false)
-    });
-    assert!(found, "TradeCancelled event not emitted");
-}
+    // Verify the close_position was called with the correct realized_pnl.
+    let closed_id = portfolio.last_closed();
+    assert_eq!(closed_id, Some(2u64));
+    let pnl = portfolio.last_pnl();
+    assert_eq!(pnl, Some(250_000i128), "realized PnL should be 250_000 when entry_price=0.95 and exit_price=1.2 for amount=1_000_000");
 
 // ── Auth propagation: cancel_copy_trade ──────────────────────────────────────
 
@@ -850,7 +887,9 @@ fn cancel_copy_trade_third_party_rejected() {
     let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_000_000);
     let third_party = Address::generate(&env);
 
-    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &5u64);
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position_with_entry_price(
+        &user, &5u64, &10_000_000i128,
+    );
 
     let err = env.as_contract(&exec_id, || {
         TradeExecutorContract::cancel_copy_trade(
@@ -862,6 +901,7 @@ fn cancel_copy_trade_third_party_rejected() {
             token_b,
             1_000_000,
             900_000,
+            10_000_000,
         )
     });
     assert_eq!(err, Err(ContractError::Unauthorized));
@@ -884,9 +924,11 @@ fn last_event_topics(env: &Env) -> (soroban_sdk::Symbol, soroban_sdk::Symbol) {
 fn trade_cancelled_event_has_two_topic_format() {
     let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_100_000);
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
-    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &1u64);
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position_with_entry_price(
+        &user, &1u64, &10_000_000i128,
+    );
     exec.cancel_copy_trade(
-        &user, &user, &1u64, &token_a, &token_b, &1_000_000, &900_000,
+        &user, &user, &1u64, &token_a, &token_b, &1_000_000, &900_000, &10_000_000,
     );
     let (contract, event) = last_event_topics(&env);
     assert_eq!(contract, soroban_sdk::Symbol::new(&env, "trade_executor"));
