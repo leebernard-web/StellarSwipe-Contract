@@ -17,6 +17,9 @@ mod voting;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
+#[allow(non_snake_case)]
+mod test_TomikeDS;
+#[cfg(test)]
 mod test_committee_elections;
 #[cfg(test)]
 mod test_health;

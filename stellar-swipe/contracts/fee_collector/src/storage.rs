@@ -1,4 +1,5 @@
 use shared::errors::{ErrorCategory, RecoveryStrategy};
+use shared::initializable;
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use stellar_swipe_common::Asset;
 
@@ -128,19 +129,14 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&StorageKey::Admin, admin);
 }
 
-// --- Initialized ---
+// --- Initialized (migrated to shared::initializable, issue #584) ---
 
 pub fn is_initialized(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .get(&StorageKey::Initialized)
-        .unwrap_or(false)
+    initializable::is_initialized(env)
 }
 
 pub fn set_initialized(env: &Env) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::Initialized, &true);
+    initializable::mark_initialized(env);
 }
 
 // --- Oracle Contract ---

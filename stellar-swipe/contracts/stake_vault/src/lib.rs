@@ -3,6 +3,7 @@
 pub mod migration;
 
 use migration::{MigrationKey, StakeInfoV2};
+use shared::initializable;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
 };
@@ -36,8 +37,8 @@ pub struct SlashTierConfig {
 impl SlashTierConfig {
     pub const fn default_config() -> Self {
         Self {
-            minor_bps: 500,    // 5 %
-            major_bps: 3_000,  // 30 %
+            minor_bps: 500,       // 5 %
+            major_bps: 3_000,     // 30 %
             critical_bps: 10_000, // 100 %
         }
     }
@@ -148,9 +149,9 @@ pub struct StakeVaultContract;
 
 #[contractimpl]
 impl StakeVaultContract {
-    /// One-time initialization.
+    /// One-time initialization (uses shared::initializable guard, issue #584).
     pub fn initialize(env: Env, admin: Address, stake_token: Address, signal_registry: Address) {
-        if env.storage().instance().has(&StorageKey::Admin) {
+        if initializable::is_initialized(&env) {
             panic!("already initialized");
         }
         env.storage().instance().set(&StorageKey::Admin, &admin);
@@ -161,6 +162,7 @@ impl StakeVaultContract {
             .instance()
             .set(&StorageKey::SignalRegistry, &signal_registry);
         env.storage().instance().set(&StorageKey::Paused, &false);
+        initializable::mark_initialized(&env);
     }
 
     // ── Emergency pause ────────────────────────────────────────────────────────
@@ -553,13 +555,20 @@ impl StakeVaultContract {
         if minor_bps > 10_000 || major_bps > 10_000 || critical_bps > 10_000 {
             return Err(StakeVaultError::InvalidSlashTier);
         }
-        let cfg = SlashTierConfig { minor_bps, major_bps, critical_bps };
+        let cfg = SlashTierConfig {
+            minor_bps,
+            major_bps,
+            critical_bps,
+        };
         env.storage()
             .instance()
             .set(&StorageKey::SlashTierConfig, &cfg);
         #[allow(deprecated)]
         env.events().publish(
-            (Symbol::new(&env, "stake_vault"), Symbol::new(&env, "slash_tiers_updated")),
+            (
+                Symbol::new(&env, "stake_vault"),
+                Symbol::new(&env, "slash_tiers_updated"),
+            ),
             (minor_bps, major_bps, critical_bps),
         );
         Ok(())
@@ -607,8 +616,8 @@ impl StakeVaultContract {
             .unwrap_or_else(SlashTierConfig::default_config);
 
         let tier_bps = match severity {
-            SlashSeverity::Minor    => cfg.minor_bps as i128,
-            SlashSeverity::Major    => cfg.major_bps as i128,
+            SlashSeverity::Minor => cfg.minor_bps as i128,
+            SlashSeverity::Major => cfg.major_bps as i128,
             SlashSeverity::Critical => cfg.critical_bps as i128,
         };
 
@@ -627,10 +636,7 @@ impl StakeVaultContract {
         }
 
         // Compute slash amount from tier percentage; min 1 stroop.
-        let slash_amount = core::cmp::max(
-            (info.balance * tier_bps) / BPS_DENOMINATOR,
-            1,
-        );
+        let slash_amount = core::cmp::max((info.balance * tier_bps) / BPS_DENOMINATOR, 1);
         let slash_amount = core::cmp::min(slash_amount, info.balance);
 
         info.balance = info.balance.saturating_sub(slash_amount);
@@ -643,7 +649,10 @@ impl StakeVaultContract {
         // Event records severity tier and resulting slash amount for audit.
         #[allow(deprecated)]
         env.events().publish(
-            (Symbol::new(&env, "stake_vault"), Symbol::new(&env, "stake_slashed")),
+            (
+                Symbol::new(&env, "stake_vault"),
+                Symbol::new(&env, "stake_slashed"),
+            ),
             (provider.clone(), severity as u32, slash_amount, reason),
         );
 
